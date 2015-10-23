@@ -15,6 +15,41 @@
  */
 package com.layer.atlas;
 
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Movie;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.MeasureSpec;
+import android.view.ViewGroup;
+import android.view.Window;
+
+import com.layer.atlas.cells.GIFCell;
+import com.layer.atlas.cells.GeoCell;
+import com.layer.atlas.cells.ImageCell;
+import com.layer.sdk.LayerClient;
+import com.layer.sdk.messaging.Conversation;
+import com.layer.sdk.messaging.Message;
+import com.layer.sdk.messaging.MessagePart;
+
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -34,41 +69,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
-import org.apache.http.HttpResponse;
-import org.apache.http.HttpStatus;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Movie;
-import android.graphics.Paint;
-import android.graphics.Rect;
-import android.graphics.RectF;
-import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
-import android.util.DisplayMetrics;
-import android.util.Log;
-import android.util.TypedValue;
-import android.view.MotionEvent;
-import android.view.View;
-import android.view.View.MeasureSpec;
-import android.view.ViewGroup;
-import android.view.Window;
-
-import com.layer.atlas.cells.GIFCell;
-import com.layer.atlas.cells.GeoCell;
-import com.layer.atlas.cells.ImageCell;
-import com.layer.sdk.LayerClient;
-import com.layer.sdk.messaging.Conversation;
-import com.layer.sdk.messaging.Message;
-import com.layer.sdk.messaging.MessagePart;
+import java.util.UUID;
 
 /**
  * @author Oleg Orlov
@@ -147,6 +148,107 @@ public class Atlas {
             sb.append(initials);
         }
         return sb.toString().trim();
+    }
+
+    public static Drawable imageFromUrl(String url) {
+        Drawable result = new Drawable();
+        downloadQueue.schedule(url, null, result);
+        return result;
+    }
+
+    public static Drawable imageFromUrlOrFile(String url, File imageFile) {
+        Drawable result;
+        if (imageFile != null && imageFile.exists() && !imageFile.isDirectory()) {
+            result = new Drawable(url, imageFile);
+            imageLoader.requestImage(url, result.fileStreamProvider, result);
+        } else {
+            result = new Drawable();
+            downloadQueue.schedule(url, imageFile, result);
+        }
+        return result;
+    }
+
+    /**
+     * ImageLoader/DownloadQueue backed drawable. Use {@link #imageFromUrl(String)} or {@link #imageFromUrlOrFile(String, File)}
+     */
+    public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
+        private static final String TAG = Drawable.class.getSimpleName();
+
+        String id;
+        File from;
+        FileStreamProvider fileStreamProvider;
+        ImageLoader.ImageSpec spec;
+        Paint workPaint = new Paint();
+        long inflatedAt = 0;
+
+        private static final int FADING_MILLIS = 333;
+
+        Drawable(){}
+        public Drawable(String imageId, File from) {
+            if (from == null) throw new IllegalArgumentException("file must not be null");
+
+            this.id = imageId != null ? imageId : UUID.randomUUID().toString();
+            this.from = from;
+            this.fileStreamProvider = new FileStreamProvider(from);
+        }
+
+        @Override
+        public void onDownloadComplete(String url, File file) {
+            this.id = url;
+            this.from = file;
+            this.fileStreamProvider = new FileStreamProvider(from);
+            imageLoader.requestImage(id, fileStreamProvider, this);
+        }
+
+        @Override
+        public void onImageLoaded(ImageLoader.ImageSpec spec) {
+            this.spec = spec;
+            this.inflatedAt = System.currentTimeMillis();
+            Log.w(TAG, "onImageLoaded() id: " + spec.id);
+            invalidateSelf();
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Bitmap bmp = (Bitmap) imageLoader.getImageFromCache(id);
+            if (bmp != null) {
+//                long age = System.currentTimeMillis() - inflatedAt;
+//                int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
+//                workPaint.setAlpha(alpha);
+//                Log.w(TAG, "draw() age: " + age + ", alpha: " + alpha + ", callback: " + getCallback());
+                canvas.drawBitmap(bmp, null, getBounds(), workPaint );
+//                if (age < FADING_MILLIS) invalidateSelf();
+            } else {
+                if (fileStreamProvider != null) {                   // only when file is fetched
+                    imageLoader.requestImage(id, fileStreamProvider, this);
+                }
+            }
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter cf) {
+        }
+
+        @Override
+        public int getOpacity() {
+            return 0;
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            if (spec == null) return 0;
+            return spec.originalWidth;
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            if (spec == null) return 0;
+            return spec.originalHeight;
+        }
     }
 
     /**
@@ -557,7 +659,7 @@ public class Atlas {
          * 
          * @return drawable, or null 
          */
-        Drawable getAvatarDrawable();
+        android.graphics.drawable.Drawable getAvatarDrawable();
         
         public static Comparator<Participant> COMPARATOR = new FilteringComparator("");
     }
@@ -571,9 +673,14 @@ public class Atlas {
          * all Participants if `filter` is `null`.  If `result` is provided, it is operated on and
          * returned.  If `result` is `null`, a new Map is created and returned.
          *
-         * @param filter The filter to apply to Participants
-         * @param result The Map to operate on
-         * @return A Map of all matching Participants keyed by ID.
+         * @param filter - <b>null</b> or filter to apply to Participants (generally text from quick-search box)
+         * @param result - <b>null</b> map to place results. If null, new instance needs to be created
+         * @return result - map of all matching Participants keyed by userId
+         *
+         * <p>TODO: drop "return value", use not-null "result" map everywhere
+         * Why: re-use user-generated Map instance may be helpfull for full-contact list, but it would be
+         * modified by user's code during next getParticipants call with filter
+         * </p>
          */
         Map<String, Participant> getParticipants(String filter, Map<String, Participant> result);
 
@@ -925,9 +1032,14 @@ public class Atlas {
                         inProgress = next;
                     }
                     try {
-                        if (Tools.downloadHttpToFile(next.url, next.file)) {
+                        File downloadTo = next.file;
+                        if (downloadTo == null) {
+                            downloadTo = File.createTempFile(String.valueOf(System.currentTimeMillis()), ".tmp");
+                            next.file = downloadTo;
+                        }
+                        if (Tools.downloadHttpToFile(next.url, downloadTo)) {
                             if (next.completeListener != null) {
-                                next.completeListener.onDownloadComplete(next.url, next.file);
+                                next.completeListener.onDownloadComplete(next.url, downloadTo);
                             }
                         };
                     } catch (Throwable e) {
@@ -942,9 +1054,9 @@ public class Atlas {
             String url;
             File file;
             CompleteListener completeListener;
+            /** @param file - if null DownloadQueue will create tempFile using {@link File#createTempFile(String, String)} }*/
             public Entry(String url, File file, CompleteListener listener) {
                 if (url == null) throw new IllegalArgumentException("url cannot be null");
-                if (file == null) throw new IllegalArgumentException("file cannot be null");
                 this.url = url;
                 this.file = file;
                 this.completeListener = listener;
