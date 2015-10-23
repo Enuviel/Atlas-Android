@@ -23,6 +23,8 @@
 		android:orientation="horizontal"
 		android:layout_width="match_parent"
 		android:layout_height="48dp"
+        android:layout_marginLeft="12dp"
+        android:layout_marginRight="12dp"
 		android:background="@color/atlas_view_participant_picker_text_background"
 		>
 		
@@ -99,6 +101,8 @@
 			android:layout_height="48dp"
 			android:gravity="center"
 			android:text="+"
+            android:textColor="@color/atlas_text_gray"
+            android:visibility="gone"
 			/>
 		
 	</LinearLayout>

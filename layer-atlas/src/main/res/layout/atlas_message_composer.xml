@@ -19,21 +19,30 @@
     android:layout_height="wrap_content"
     android:orientation="horizontal" >
 
-    <TextView 
-        android:id="@+id/atlas_message_composer_upload"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:layout_gravity="bottom"
-        android:gravity="center"
-        android:text="+"
-        android:visibility="gone"
-        />
-    
+    <FrameLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="12dp">
+
+        <TextView
+            android:id="@+id/atlas_message_composer_upload"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="bottom"
+            android:gravity="center"
+            android:text="+"
+            android:textColor="@color/atlas_text_gray"
+            android:visibility="gone"
+            />
+
+    </FrameLayout>
+
     <EditText
         android:id="@+id/atlas_message_composer_text"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
+        android:layout_gravity="center_vertical"
         android:maxLines="4"
         android:textSize="@dimen/atlas_text_size_general"
         android:background="@drawable/atlas_ctl_edit_text"

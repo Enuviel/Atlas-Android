@@ -37,6 +37,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -212,6 +213,7 @@ public class AtlasConversationsList extends FrameLayout implements LayerChangeEv
                     avatarImgView.setImageBitmap(avatarBmp);
                 }
                 Canvas canvas = new Canvas(avatarBmp);
+                canvas.drawColor(0, Mode.CLEAR);
                 canvas.drawColor(avatarBackgroundColor);
                 if (allButMe.size() < 2) {
                     String conterpartyUserId = allButMe.get(0);
@@ -409,7 +411,22 @@ public class AtlasConversationsList extends FrameLayout implements LayerChangeEv
             });
         }
     }
-    
+
+    private volatile boolean refreshScheduled = false;
+
+    public void requestRefresh() {
+        if (refreshScheduled) return;
+        refreshScheduled = true;
+        conversationsList.post(INVALIDATE_VIEW);
+    }
+
+    private final Runnable INVALIDATE_VIEW = new Runnable() {
+        public void run() {
+            conversationsList.invalidateViews();
+            refreshScheduled = false;
+        }
+    };
+
     public void setQuery(Query<Conversation> query) {
         if (debug) Log.w(TAG, "setQuery() query: " + query);
         // check
