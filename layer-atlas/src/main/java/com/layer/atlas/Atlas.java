@@ -15,41 +15,6 @@
  */
 package com.layer.atlas;
 
-import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.ColorFilter;
-import android.graphics.Movie;
-import android.graphics.Paint;
-import android.graphics.Rect;
-import android.graphics.RectF;
-import android.graphics.drawable.BitmapDrawable;
-import android.util.DisplayMetrics;
-import android.util.Log;
-import android.util.TypedValue;
-import android.view.MotionEvent;
-import android.view.View;
-import android.view.View.MeasureSpec;
-import android.view.ViewGroup;
-import android.view.Window;
-
-import com.layer.atlas.cells.GIFCell;
-import com.layer.atlas.cells.GeoCell;
-import com.layer.atlas.cells.ImageCell;
-import com.layer.sdk.LayerClient;
-import com.layer.sdk.messaging.Conversation;
-import com.layer.sdk.messaging.Message;
-import com.layer.sdk.messaging.MessagePart;
-
-import org.apache.http.HttpResponse;
-import org.apache.http.HttpStatus;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -69,7 +34,45 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Movie;
+import android.graphics.Paint;
+import android.graphics.Paint.Style;
+import android.graphics.PixelFormat;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.MeasureSpec;
+import android.view.ViewGroup;
+import android.view.Window;
+
+import com.layer.atlas.cells.GIFCell;
+import com.layer.atlas.cells.GeoCell;
+import com.layer.atlas.cells.ImageCell;
+import com.layer.sdk.LayerClient;
+import com.layer.sdk.messaging.Conversation;
+import com.layer.sdk.messaging.Message;
+import com.layer.sdk.messaging.MessagePart;
 
 /**
  * @author Oleg Orlov
@@ -151,7 +154,7 @@ public class Atlas {
     }
 
     public static Drawable imageFromUrl(String url) {
-        Drawable result = new Drawable();
+        Drawable result = new Drawable(url);
         downloadQueue.schedule(url, null, result);
         return result;
     }
@@ -162,7 +165,7 @@ public class Atlas {
             result = new Drawable(url, imageFile);
             imageLoader.requestImage(url, result.fileStreamProvider, result);
         } else {
-            result = new Drawable();
+            result = new Drawable(url);
             downloadQueue.schedule(url, imageFile, result);
         }
         return result;
@@ -173,7 +176,41 @@ public class Atlas {
      */
     public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
         private static final String TAG = Drawable.class.getSimpleName();
+        private static final boolean debug = false;
+        private static final boolean debugDraw = false;
+        private static final Paint debugPaintDwnld = new Paint();
+        private static final Paint debugPaintInflt = new Paint();
+        private static final Paint debugPaintCmplt = new Paint();
+        private static final Paint debugPaintStroke = new Paint();
 
+        static {
+            debugPaintDwnld.setStyle(Style.FILL);
+            debugPaintDwnld.setColor(Color.rgb(176, 190, 197));
+
+            debugPaintInflt.setStyle(Style.FILL);
+            debugPaintInflt.setColor(Color.rgb(255, 150, 0));
+
+            debugPaintCmplt.setStyle(Style.FILL);
+            debugPaintCmplt.setColor(Color.rgb(36, 155, 34));
+            
+            debugPaintStroke.setStyle(Style.STROKE);
+            debugPaintStroke.setColor(Color.BLACK);
+        }
+        
+        private static final Handler mainHandler = new Handler(Looper.getMainLooper()) {
+            public void handleMessage(android.os.Message msg) {
+                switch (msg.what) {
+                    case 0: {
+                        Drawable drawable = (Drawable) msg.obj;
+                        if (debug) Log.w(TAG, "handleMessage() callback: " + drawable.getCallback() + ", msg: " + msg);
+                        drawable.invalidateSelf();
+                        break;
+                    }
+                }
+            }
+        };
+        
+        /** Is used to address bitmaps in cache */
         String id;
         File from;
         FileStreamProvider fileStreamProvider;
@@ -183,46 +220,69 @@ public class Atlas {
 
         private static final int FADING_MILLIS = 333;
 
-        Drawable(){}
+        /** @param {@link #id} - must be specified for correct work */
+        protected Drawable(String id){
+            this.id = id; 
+        }
+        
+        /** @param imageId - is used to address objects in cache */
         public Drawable(String imageId, File from) {
+            if (imageId == null) throw new IllegalArgumentException("Drawable .id cannot be null");
             if (from == null) throw new IllegalArgumentException("file must not be null");
 
-            this.id = imageId != null ? imageId : UUID.randomUUID().toString();
+            this.id = imageId;
             this.from = from;
             this.fileStreamProvider = new FileStreamProvider(from);
         }
 
         @Override
         public void onDownloadComplete(String url, File file) {
-            this.id = url;
             this.from = file;
             this.fileStreamProvider = new FileStreamProvider(from);
             imageLoader.requestImage(id, fileStreamProvider, this);
+            
+            invalidate();
         }
 
         @Override
         public void onImageLoaded(ImageLoader.ImageSpec spec) {
             this.spec = spec;
             this.inflatedAt = System.currentTimeMillis();
-            Log.w(TAG, "onImageLoaded() id: " + spec.id);
-            invalidateSelf();
-        }
+            if (debug) Log.w(TAG, "onImageLoaded() spec .id: " + spec.id + ", .width: " + spec.originalWidth + ", height: " + spec.originalHeight + ", callback: " + getCallback());
 
+            invalidate();
+        }
+        
         @Override
         public void draw(Canvas canvas) {
+            if (debug) Log.d(TAG, "draw() id: " + id + ", callback: " + getCallback());
             Bitmap bmp = (Bitmap) imageLoader.getImageFromCache(id);
             if (bmp != null) {
-//                long age = System.currentTimeMillis() - inflatedAt;
-//                int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
-//                workPaint.setAlpha(alpha);
-//                Log.w(TAG, "draw() age: " + age + ", alpha: " + alpha + ", callback: " + getCallback());
+                long age = System.currentTimeMillis() - inflatedAt;
+                int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
+                workPaint.setAlpha(alpha);
+                if (debug) Log.d(TAG, "draw() age: " + age + ", alpha: " + alpha);
                 canvas.drawBitmap(bmp, null, getBounds(), workPaint );
-//                if (age < FADING_MILLIS) invalidateSelf();
+                if (age < FADING_MILLIS) invalidateSelf();
             } else {
                 if (fileStreamProvider != null) {                   // only when file is fetched
                     imageLoader.requestImage(id, fileStreamProvider, this);
                 }
             }
+            if (debugDraw) {
+                if (bmp != null) {
+                    Tools.drawRect(getBounds().left, getBounds().top, 10, 10, debugPaintCmplt, debugPaintStroke, canvas);
+                } else if (fileStreamProvider == null) {
+                    Tools.drawRect(getBounds().left, getBounds().top, 10, 10, debugPaintDwnld, debugPaintStroke, canvas);
+                } else {
+                    Tools.drawRect(getBounds().left, getBounds().top, 10, 10, debugPaintInflt, debugPaintStroke, canvas);
+                }
+            }
+        }
+        
+        protected void invalidate() {
+            if  (Looper.getMainLooper() == Looper.myLooper()) invalidateSelf();
+            else mainHandler.obtainMessage(0, this).sendToTarget();
         }
 
         @Override
@@ -235,20 +295,58 @@ public class Atlas {
 
         @Override
         public int getOpacity() {
-            return 0;
+            return PixelFormat.TRANSLUCENT;
         }
 
+        /** 
+         * Return original size of image or 1 if image is not loaded
+         * 
+         * <p>Note:</br>
+         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         */
         @Override
         public int getIntrinsicWidth() {
-            if (spec == null) return 0;
-            return spec.originalWidth;
+            int width = 1;
+            if (spec != null) width = spec.originalWidth;
+            if (debug) Log.w(TAG, "getIntrinsicWidth() width: " + width);
+            return width;
         }
 
+        /** 
+         * Return original size of image or 1 if image is not loaded
+         * 
+         * <p>Note:</br>
+         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         */
         @Override
         public int getIntrinsicHeight() {
-            if (spec == null) return 0;
-            return spec.originalHeight;
+            int height = 1;
+            if (spec != null) height = spec.originalHeight;
+            if (debug) Log.w(TAG, "getIntrinsicHeight() height: " + height);
+            return height;
         }
+        
+        public String toString() {
+            StringBuilder builder = new StringBuilder();
+            builder.append("id: ").append(id)
+                .append(", from: ").append(from)
+                .append(", spec: ").append(spec)
+                .append(", inflatedAt: ").append(inflatedAt);
+            return builder.toString();
+        }
+        
+        public String getId() {
+            return id;
+        }
+        
+        public ImageLoader.ImageSpec getSpec() {
+            return spec;
+        }
+        
+        public File getFile() {
+            return from;
+        }
+
     }
 
     /**
@@ -516,37 +614,41 @@ public class Atlas {
         }
 
         public static boolean downloadHttpToFile(String url, File file) {
+            if (url == null) Log.e(TAG, "downloadHttpToFile() url is null, file: " + file);
             HttpGet get = new HttpGet(url);
             HttpResponse response;
             try {
                 response = (new DefaultHttpClient()).execute(get);
                 if (HttpStatus.SC_OK != response.getStatusLine().getStatusCode()) {
-                    Log.e(TAG, String.format("Expected status 200, but got %d", response.getStatusLine().getStatusCode()));
+                    Log.e(TAG, "Expected status 200, but got " + response.getStatusLine().getStatusCode() + ", url: [" + url + "]");
                     return false;
                 }
             } catch (Exception e) {
-                Log.e(TAG, "downloadToFile() cannot execute http request: " + url, e);
+                Log.e(TAG, "downloadToFile() cannot execute http request, url: [" + url + "]", e);
                 return false;
             }
         
             File dir = file.getParentFile();
             if (!dir.exists() && !dir.mkdirs()) {
-                Log.e(TAG, String.format("Could not create directories for `%s`", dir.getAbsolutePath()));
+                Log.e(TAG, "Could not create folders, url: [" + url + "] dir: " + dir.getAbsolutePath());
                 return false;
             }
             
-            File tempFile = new File(file.getAbsolutePath() + ".tmp");
+            File tempFile = new File(file.getAbsolutePath() + ".download");
             
             try {
                 streamCopyAndClose(response.getEntity().getContent(), new FileOutputStream(tempFile, false));
                 response.getEntity().consumeContent();
             } catch (IOException e) {
-                if (debug) Log.e(TAG, "downloadToFile() cannot extract content from http response: " + url, e);
+                if (debug) Log.e(TAG, "downloadToFile() cannot extract content from http response for [" + url + "]", e);
             }
         
             if (tempFile.length() != response.getEntity().getContentLength()) {
                 tempFile.delete();
-                Log.e(TAG, String.format("downloadToFile() File size mismatch for `%s` (%d vs %d)", tempFile.getAbsolutePath(), tempFile.length(), response.getEntity().getContentLength()));
+                Log.e(TAG, "downloadToFile() File size mismatch for [" + url + "] "
+                         + " expected: " + response.getEntity().getContentLength() 
+                         + " actual: " + tempFile.length()
+                         + " path: " + tempFile.getAbsolutePath());
                 return false;
             }
             
@@ -614,6 +716,14 @@ public class Atlas {
         public static void drawPlusCircle(float xCenter, float yCenter, float radius, Paint paint, Canvas canvas) {
             drawPlus(xCenter - 1.1f * radius, yCenter - 1.1f * radius, xCenter + 1.1f * radius, yCenter + 1.1f * radius, paint, canvas);
             canvas.drawCircle(xCenter, yCenter, radius, paint);
+        }
+        
+        public static void drawRect(float left, float top, float width, float height, Paint p, Canvas canvas) {
+            canvas.drawRect(left, top, left + width, top + height, p);
+        }
+        public static void drawRect(float left, float top, float width, float height, Paint p, Paint strokeP, Canvas canvas) {
+            drawRect(left, top, width, height, p, canvas);
+            drawRect(left, top, width, height, strokeP, canvas);
         }
 
         /** Window flags for translucency are available on Android 5.0+ */
@@ -974,6 +1084,17 @@ public class Atlas {
             public int downloadProgress;
             public int retries = 0;
             public ImageLoader.ImageLoadListener listener;
+            
+            public String toString() {
+                StringBuilder sb = new StringBuilder();
+                sb.append("id: ").append(id);
+                sb.append(", required: ").append(requiredWidth).append("x").append(requiredHeight);
+                sb.append(", original: ").append(originalWidth).append("x").append(originalHeight);
+                sb.append(gif ? ", gif" : "");
+                sb.append(", progress: ").append(downloadProgress);
+                return sb.toString();
+            }
+            
         }
 
         public interface ImageLoadListener {
@@ -999,7 +1120,22 @@ public class Atlas {
             workingThread.start();
         }
         
-        public void schedule(String url, File to, CompleteListener onComplete) {
+        /** 
+         * 
+         * {@link #schedule(String, File, CompleteListener)} with <code>File == null</code> 
+         */
+        public void schedule(String url, CompleteListener onComplete) {
+            schedule(url, null, onComplete);
+        }
+        
+        /**
+         * Schedule download of content from specified url to file
+         * 
+         * @param toFile - if <b>null</b> queue will create temp file and pass it to {@link CompleteListener#onDownloadComplete(String, File)}
+         */
+        public void schedule(String url, File toFile, CompleteListener onComplete) {
+            if (debug) Log.d(TAG, "schedule() url: " + url + " toFile: " + toFile + " onComplete: " + onComplete);
+            if (url == null || url.isEmpty()) throw new IllegalArgumentException("url must be defined: [" + url + "], file: " + toFile + ", onComplete: " + onComplete);
             if (inProgress != null && inProgress.url.equals(url)){
                 return;
             }
@@ -1009,7 +1145,7 @@ public class Atlas {
                     queue.remove(existing);
                     queue.add(existing);
                 } else {
-                    Entry toSchedule = new Entry(url, to, onComplete);
+                    Entry toSchedule = new Entry(url, toFile, onComplete);
                     queue.add(toSchedule);
                     url2Entry.put(toSchedule.url, toSchedule);
                 }
