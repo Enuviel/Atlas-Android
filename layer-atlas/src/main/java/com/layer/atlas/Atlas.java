@@ -32,6 +32,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -97,7 +98,7 @@ public class Atlas {
 
     public static final ImageLoader imageLoader = new ImageLoader();
 
-    public static final Atlas.DownloadQueue downloadQueue = new DownloadQueue();
+    public static final Atlas.DownloadQueue downloadQueue = new DownloadQueue(2);
 
     public static String getInitials(Participant p) {
         StringBuilder sb = new StringBuilder();
@@ -1110,62 +1111,93 @@ public class Atlas {
     public static class DownloadQueue {
         private static final String TAG = DownloadQueue.class.getSimpleName();
         
-        final ArrayList<Entry> queue = new ArrayList<Atlas.DownloadQueue.Entry>();
-        final HashMap<String, Entry> url2Entry = new HashMap<String, Entry>();
-        private volatile Entry inProgress = null;
+        private static final Object queueMonitor = new Object();
+        private final LinkedList<Entry> queue = new LinkedList<Atlas.DownloadQueue.Entry>();
+        private final HashMap<String, Entry> scheduledEntries = new HashMap<String, Atlas.DownloadQueue.Entry>();
+        private final HashMap<String, Entry> inProgress = new HashMap<String, Atlas.DownloadQueue.Entry>();
+        private Thread[] workers;
         
         public DownloadQueue() {
-            workingThread.setDaemon(true);
-            workingThread.setName("Atlas-HttpDownloadQueue"); 
-            workingThread.start();
+            this(1);
+        }
+        public DownloadQueue(int workers) {
+            this.workers = new Thread[workers];
+            for (int i = 0; i < workers; i++) {
+                Thread workingThread = new Thread(new Worker());
+                workingThread.setDaemon(true);
+                workingThread.setName(i == 0 ? "Atlas-HttpLoader" : ("Atlas-HttpLoader-" + i)); 
+                workingThread.start();
+            }
         }
         
         /** 
-         * 
          * {@link #schedule(String, File, CompleteListener)} with <code>File == null</code> 
          */
         public void schedule(String url, CompleteListener onComplete) {
             schedule(url, null, onComplete);
         }
         
+        /** 
+         * {@link #schedule(String, File, CompleteListener, first)} with <code>first == false</code> 
+         */
+        public void schedule(String url, File toFile, CompleteListener onComplete) {
+            schedule(url, toFile, onComplete, false);
+        }
+        
         /**
          * Schedule download of content from specified url to file
          * 
          * @param toFile - if <b>null</b> queue will create temp file and pass it to {@link CompleteListener#onDownloadComplete(String, File)}
+         * @param first  - add in the beginning of the queue 
          */
-        public void schedule(String url, File toFile, CompleteListener onComplete) {
+        public void schedule(String url, File toFile, CompleteListener onComplete, boolean first) {
             if (debug) Log.d(TAG, "schedule() url: " + url + " toFile: " + toFile + " onComplete: " + onComplete);
             if (url == null || url.isEmpty()) throw new IllegalArgumentException("url must be defined: [" + url + "], file: " + toFile + ", onComplete: " + onComplete);
-            if (inProgress != null && inProgress.url.equals(url)){
-                return;
-            }
-            synchronized (queue) {
-                Entry existing = url2Entry.get(url);
-                if (existing != null) {
-                    queue.remove(existing);
-                    queue.add(existing);
+            
+            // if url and destination file both are similar to something scheduled - just attach another listener
+            // otherwise schedule to download
+            synchronized (queueMonitor) {
+                Entry scheduled = scheduled(url);
+                if (scheduled != null && isSame(scheduled.file, toFile)) {
+                    if (onComplete != null) {
+                        scheduled.completeListeners.add(onComplete);
+                    }
+                    if (first && inProgress(url) == null && queue.getFirst() != scheduled) {
+                        queue.remove(scheduled);
+                        queue.addFirst(scheduled);
+                        queueMonitor.notifyAll();
+                    }
                 } else {
                     Entry toSchedule = new Entry(url, toFile, onComplete);
-                    queue.add(toSchedule);
-                    url2Entry.put(toSchedule.url, toSchedule);
+                    if (first) {
+                        queue.addFirst(toSchedule);
+                    } else {
+                        queue.add(toSchedule);
+                    }
+                    scheduledEntries.put(toSchedule.url, toSchedule);
+                    queueMonitor.notifyAll();
                 }
-                queue.notifyAll();
             }
         }
         
-        private Thread workingThread = new Thread(new Runnable() {
+        /** 
+         * Picks first available entry from queue and fetch it.
+         * In progress entries could be found in {@link #inProgress} set
+         */
+        private final class Worker implements Runnable {
             public void run() {
                 while (true) {
                     Entry next = null;
-                    synchronized (queue) {
+                    synchronized (queueMonitor) {
                         while (queue.size() == 0) {
                             try {
-                                queue.wait();
+                                queueMonitor.wait();
                             } catch (InterruptedException ignored) {}
                         }
-                        next = queue.remove(queue.size() - 1); // get last
-                        url2Entry.remove(next.url);
-                        inProgress = next;
+                        next = queue.removeFirst();
+                        scheduledEntries.remove(next.url);
+                        // onStart
+                        inProgress.put(next.url, next);
                     }
                     try {
                         File downloadTo = next.file;
@@ -1174,28 +1206,56 @@ public class Atlas {
                             next.file = downloadTo;
                         }
                         if (Tools.downloadHttpToFile(next.url, downloadTo)) {
-                            if (next.completeListener != null) {
-                                next.completeListener.onDownloadComplete(next.url, downloadTo);
+                            for (CompleteListener onComplete : next.completeListeners) {
+                                onComplete.onDownloadComplete(next.url, downloadTo);
                             }
                         };
                     } catch (Throwable e) {
                         Log.e(TAG, "onComplete() thrown an exception for: " + next.url, e);
                     }
-                    inProgress = null;
+                    // onComplete
+                    synchronized (queue) {
+                        inProgress.remove(next.url);
+                    }
                 }
             }
-        });
+        }
+        
+        /** @return true if inProgress or scheduled */
+        private Entry scheduled(String url) {
+            synchronized (queueMonitor) {
+                Entry entry = scheduledEntries.get(url);
+                if (entry != null) return entry;
+                entry = inProgress.get(url);
+                return entry;
+            }
+        }
+        
+        /** @return true if inProgress or scheduled */
+        private Entry inProgress(String url) {
+            synchronized (queueMonitor) {
+                Entry entry = inProgress.get(url);
+                return entry;
+            }
+        }
+        
+        private static boolean isSame(Object left, Object right) {
+            if (left == right) return true;
+            if (left == null && right == null) return true;
+            if (left != null && right != null && left.equals(right)) return true;
+            return false;
+        }
         
         private static class Entry {
             String url;
             File file;
-            CompleteListener completeListener;
+            ArrayList<CompleteListener> completeListeners = new ArrayList<Atlas.DownloadQueue.CompleteListener>(3);
             /** @param file - if null DownloadQueue will create tempFile using {@link File#createTempFile(String, String)} }*/
             public Entry(String url, File file, CompleteListener listener) {
                 if (url == null) throw new IllegalArgumentException("url cannot be null");
                 this.url = url;
                 this.file = file;
-                this.completeListener = listener;
+                this.completeListeners.add(listener);
             }
         }
         
