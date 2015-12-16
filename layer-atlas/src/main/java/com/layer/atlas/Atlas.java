@@ -217,7 +217,13 @@ public class Atlas {
         };
         
         /** Is used to address bitmaps in cache */
-        String id;
+        private String id;
+        
+        /** is used while image original width  is not available (during download and inflating)*/
+        private int defaultWidth    = 1;
+        /** is used while image original height is not available (during download and inflating)*/
+        private int defaultHeight   = 1;
+        
         File from;
         FileStreamProvider fileStreamProvider;
         ImageLoader.ImageSpec spec;
@@ -240,6 +246,12 @@ public class Atlas {
             this.from = from;
             this.fileStreamProvider = new FileStreamProvider(from);
         }
+        
+        public Drawable defaultSize(int width, int height) {
+            this.defaultWidth  = width;
+            this.defaultHeight = height;
+            return this;
+        }
 
         @Override
         public void onDownloadComplete(String url, File file) {
@@ -260,7 +272,7 @@ public class Atlas {
         
         @Override
         public void setBounds(int left, int top, int right, int bottom) {
-            if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace());
+            if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
             super.setBounds(left, top, right, bottom);
         }
 
@@ -284,28 +296,29 @@ public class Atlas {
         
         /** 
          * Return original size of image or 1 if image is not loaded
-         * 
-         * <p>Note:</br>
-         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         * <p><b>NOTE:</b> if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
          */
         @Override
         public int getIntrinsicWidth() {
-            int width = 10000;
-            if (spec != null) width = spec.originalWidth;
+            int width = 0;
+            if (spec != null) width = spec.originalWidth; 
+            if (width == 0) width = imageLoader.getOriginalImageWidth(id);
+            if (width == 0) width = defaultWidth;   // fallback to defailt
+            
             if (debug) Log.w(TAG, "getIntrinsicWidth()  " + width + (spec == null ? (", id: " + id) : ", spec: " + spec) + " from: " + Dt.printStackTrace(7));
             return width;
         }
 
         /** 
          * Return original size of image or 1 if image is not loaded
-         * 
-         * <p>Note:</br>
-         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         * <p><b>Note:</b> if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
          */
         @Override
         public int getIntrinsicHeight() {
-            int height = 10000;
+            int height = 0;
             if (spec != null) height = spec.originalHeight;
+            if (height == 0) height = imageLoader.getOriginalImageHeight(id);
+            if (height == 0) height = defaultHeight;
             if (debug) Log.w(TAG, "getIntrinsicHeight() " + height + (spec == null ? (", id: " + id) : ", spec: " + spec)  + " from: " + Dt.printStackTrace(7));
             return height;
         }
@@ -322,6 +335,7 @@ public class Atlas {
                 canvas.drawBitmap(bmp, null, getBounds(), workPaint );
                 if (age < FADING_MILLIS) invalidateSelf();
             } else {
+                if (debug) Log.d(TAG, "draw() no bitmap, request id: " + id);
                 if (fileStreamProvider != null) {                   // only when file is fetched
                     imageLoader.requestImage(id, fileStreamProvider, this);
                 }
@@ -883,9 +897,9 @@ public class Atlas {
         private final ArrayList<ImageSpec> queue = new ArrayList<ImageSpec>();
         
         /** image_id -> Bitmap | Movie */
-        private LinkedHashMap<Object, Object> cache = new LinkedHashMap<Object, Object>(40, 1f, true) {
+        private LinkedHashMap<Object, ImageCacheEntry> cache = new LinkedHashMap<Object, ImageCacheEntry>(40, 1f, true) {
             private static final long serialVersionUID = 1L;
-            protected boolean removeEldestEntry(Entry<Object, Object> eldest) {
+            protected boolean removeEldestEntry(Entry<Object, ImageCacheEntry> eldest) {
                 // calculate available memory
                 long maxMemory = Runtime.getRuntime().maxMemory();
                 long usedMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
@@ -932,13 +946,17 @@ public class Atlas {
                         }
                     }
                     
-                    Object result = null;
+                    Object bitmapOrMovie = null;
                     if (spec.gif) {
                         InputStream is = spec.inputStreamProvider.getInputStream();
                         Movie mov = Movie.decodeStream(is);
                         if (debug) Log.w(TAG, "decodeImage() decoded GIF " + mov.width() + "x" + mov.height() + ":" + mov.duration() + "ms");
                         Tools.closeQuietly(is);
-                        result = mov;
+                        bitmapOrMovie = mov;
+                        if (mov != null) {
+                            spec.originalHeight = mov.height();
+                            spec.originalWidth  = mov.width();
+                        }
                     } else {
                         // decode dimensions
                         long started = System.currentTimeMillis();
@@ -988,13 +1006,14 @@ public class Atlas {
                             if (debug) Log.d(TAG, "decodeImage() not decoded " + " req: " + requiredWidth + "x" + requiredHeight 
                                     + " in " +(System.currentTimeMillis() - started) + "ms from: " + spec.id);
                         }
-                        result = bmp;
+                        bitmapOrMovie = bmp;
                     }
-   
+
                     // decoded
                     synchronized (lock) {
-                        if (result != null) {
-                            cache.put(spec.id, result);
+                        if (bitmapOrMovie != null) {
+                            ImageCacheEntry imageCore = new ImageCacheEntry(bitmapOrMovie, spec.originalWidth, spec.originalHeight, spec.inputStreamProvider);
+                            cache.put(spec.id, imageCore);
                             if (spec.listener != null) spec.listener.onImageLoaded(spec);
                         } else if (spec.retries < BITMAP_DECODE_RETRIES) {
                             spec.retries++;
@@ -1033,7 +1052,23 @@ public class Atlas {
         }
     
         public Object getImageFromCache(Object id) {
-            return cache.get(id);
+            ImageCacheEntry imageEntry = cache.get(id);
+            if (imageEntry == null) return null;
+            return imageEntry.bitmapOrMovie;
+        }
+        
+        /** @return originalImageWidth if image is in cache, 0 otherwise */
+        public int getOriginalImageWidth(Object id) {
+            ImageCacheEntry imageEntry = cache.get(id);
+            if (imageEntry == null) return 0;
+            return imageEntry.originalWidth;
+        }
+        
+        /** @return originalImageHeight if image is in cache, 0 otherwise */
+        public int getOriginalImageHeight(Object id) {
+            ImageCacheEntry imageEntry = cache.get(id);
+            if (imageEntry == null) return 0;
+            return imageEntry.originalHeight;
         }
                 
         /**
@@ -1042,8 +1077,8 @@ public class Atlas {
         private int removeEldest() {
             synchronized (lock) {
                 if (cache.size() > 0) {
-                    Map.Entry<Object, Object> entry = cache.entrySet().iterator().next();
-                    Object bmp = entry.getValue();
+                    Map.Entry<Object, ImageCacheEntry> entry = cache.entrySet().iterator().next();
+                    Object bmp = entry.getValue().bitmapOrMovie;
                     cache.remove(entry.getKey());
                     int releasedBytes = (bmp instanceof Bitmap) ? ((Bitmap) bmp).getByteCount() : 0; /*((Movie)bmp).byteCount(); */
                     if (debug) Log.w(TAG, "removeEldest() id: " + entry.getKey() + ", bytes: " + releasedBytes);
@@ -1099,13 +1134,41 @@ public class Atlas {
                     spec.listener = loadListener;
                     spec.gif = gif;
                 }
+                // check something we have in memory for such id
+                ImageCacheEntry imageEntry = cache.get(id);
+                if (imageEntry != null && imageEntry.inputStreamProvider.equals(streamProvider)) {
+                    if (debug) Log.w(TAG, "requestImage() wow, we already inflated one: [" + imageEntry.originalWidth + "x" + imageEntry.originalHeight + "] put it in spec");
+                    spec.originalWidth = imageEntry.originalWidth;
+                    spec.originalHeight = imageEntry.originalHeight;
+                }
                 queue.add(0, spec);                             // and put it to the surface in front of all 
                 lock.notifyAll();
             }
             if (debug) Log.w(TAG, "requestBitmap() cache: " + cache.size() + ", queue: " + queue.size() + ", id: " + id + ", reqs: " + requiredWidth + "x" + requiredHeight);
             return spec;
         }
+        
+        /** 
+         * a) contains link to actual image, and is used as cache entry<br> 
+         * b) contains image's original dimensions. Allows to return filled ImageSpec before it is inflated 
+         */
+        private static class ImageCacheEntry {
+            public final int originalWidth;
+            public final int originalHeight;
+            public final InputStreamProvider inputStreamProvider;
+            public final Object bitmapOrMovie;
+            
+            public ImageCacheEntry(Object bitmapOrMovie, int originalWidth, int originalHeight, InputStreamProvider inputStreamProvider) {
+                this.originalWidth = originalWidth;
+                this.originalHeight = originalHeight;
+                this.inputStreamProvider = inputStreamProvider;
+                this.bitmapOrMovie = bitmapOrMovie;
+            }
+        }
 
+        /**
+         * Everything you need to know about image even if it is not in memory 
+         */
         public static class ImageSpec {
             public Object id;
             public InputStreamProvider inputStreamProvider;
@@ -1350,6 +1413,12 @@ public class Atlas {
         public boolean ready() {
             if (ImageLoader.debug) Log.w(ImageLoader.TAG, "ready() FileStreamProvider, file ready: " + file.getAbsolutePath());
             return true;
+        }
+        public boolean equals(Object o) {
+            return file.equals(o);
+        }
+        public int hashCode() {
+            return file.hashCode();
         }
     }
 
