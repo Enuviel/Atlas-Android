@@ -66,7 +66,9 @@ import android.view.View;
 import android.view.View.MeasureSpec;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.ImageView;
 
+import com.layer.atlas.Atlas.DownloadQueue.CompleteListener;
 import com.layer.atlas.cells.GIFCell;
 import com.layer.atlas.cells.GeoCell;
 import com.layer.atlas.cells.ImageCell;
@@ -177,7 +179,7 @@ public class Atlas {
      */
     public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
         private static final String TAG = Drawable.class.getSimpleName();
-        private static final boolean debug = false;
+        private static final boolean debug = true;
         private static final boolean debugDraw = false;
         private static final Paint debugPaintDwnld = new Paint();
         private static final Paint debugPaintInflt = new Paint();
@@ -203,7 +205,10 @@ public class Atlas {
                 switch (msg.what) {
                     case 0: {
                         Drawable drawable = (Drawable) msg.obj;
-                        if (debug) Log.w(TAG, "handleMessage() callback: " + drawable.getCallback() + ", msg: " + msg);
+                        //if (debug) Log.w(TAG, "handleMessage() callback: " + drawable.getCallback() + ", msg: " + msg);
+                        if (drawable.getCallback() instanceof ImageView) {
+                            ((ImageView)drawable.getCallback()).setImageState(null, true);
+                        }
                         drawable.invalidateSelf();
                         break;
                     }
@@ -249,9 +254,60 @@ public class Atlas {
         public void onImageLoaded(ImageLoader.ImageSpec spec) {
             this.spec = spec;
             this.inflatedAt = System.currentTimeMillis();
-            if (debug) Log.w(TAG, "onImageLoaded() spec .id: " + spec.id + ", .width: " + spec.originalWidth + ", height: " + spec.originalHeight + ", callback: " + getCallback());
-
+            if (debug) Log.w(TAG, "onImageLoaded()      spec: " + spec + ", callback: " + getCallback());
             invalidate();
+        }
+        
+        @Override
+        public void setBounds(int left, int top, int right, int bottom) {
+            if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace());
+            super.setBounds(left, top, right, bottom);
+        }
+
+        @Override
+        public void setBounds(Rect bounds) {
+            if (debug) Log.w(TAG, "setBounds()          " + bounds + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
+            super.setBounds(bounds);
+        }
+
+        @Override
+        public boolean setState(int[] stateSet) {
+            if (debug) Log.w(TAG, "setState()           " + Dt.toString(stateSet) + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
+            return super.setState(stateSet);
+        }
+
+        @Override
+        protected void onBoundsChange(Rect bounds) {
+            if (debug) Log.w(TAG, "onBoundsChange()     " + bounds + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
+            super.onBoundsChange(bounds);
+        }
+        
+        /** 
+         * Return original size of image or 1 if image is not loaded
+         * 
+         * <p>Note:</br>
+         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         */
+        @Override
+        public int getIntrinsicWidth() {
+            int width = 10000;
+            if (spec != null) width = spec.originalWidth;
+            if (debug) Log.w(TAG, "getIntrinsicWidth()  " + width + (spec == null ? (", id: " + id) : ", spec: " + spec) + " from: " + Dt.printStackTrace(7));
+            return width;
+        }
+
+        /** 
+         * Return original size of image or 1 if image is not loaded
+         * 
+         * <p>Note:</br>
+         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
+         */
+        @Override
+        public int getIntrinsicHeight() {
+            int height = 10000;
+            if (spec != null) height = spec.originalHeight;
+            if (debug) Log.w(TAG, "getIntrinsicHeight() " + height + (spec == null ? (", id: " + id) : ", spec: " + spec)  + " from: " + Dt.printStackTrace(7));
+            return height;
         }
         
         @Override
@@ -299,34 +355,6 @@ public class Atlas {
             return PixelFormat.TRANSLUCENT;
         }
 
-        /** 
-         * Return original size of image or 1 if image is not loaded
-         * 
-         * <p>Note:</br>
-         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
-         */
-        @Override
-        public int getIntrinsicWidth() {
-            int width = 1;
-            if (spec != null) width = spec.originalWidth;
-            if (debug) Log.w(TAG, "getIntrinsicWidth() width: " + width);
-            return width;
-        }
-
-        /** 
-         * Return original size of image or 1 if image is not loaded
-         * 
-         * <p>Note:</br>
-         * if intrinsic dimensions are 0x0 - ImageView doesn't pass control to {@link Drawable#draw(Canvas)} 
-         */
-        @Override
-        public int getIntrinsicHeight() {
-            int height = 1;
-            if (spec != null) height = spec.originalHeight;
-            if (debug) Log.w(TAG, "getIntrinsicHeight() height: " + height);
-            return height;
-        }
-        
         public String toString() {
             StringBuilder builder = new StringBuilder();
             builder.append("id: ").append(id)
@@ -1042,6 +1070,10 @@ public class Atlas {
         }
         
         /** 
+         * Most recently requested images would be inflated first to provide the quickest response 
+         * (i.e. if user scroll 100 images back and force, the most important one is that he stopped at, 
+         * and it is the last requested in general scenario)
+         * 
          * @param id                - something you will use to get image from cache later
          * @param streamProvider    - something that provides raw bytes. See {@link Atlas.FileStreamProvider} or {@link Atlas.MessagePartStreamProvider}
          * @param requiredWidth     - 
@@ -1052,7 +1084,7 @@ public class Atlas {
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, int requiredWidth, int requiredHeight, boolean gif, ImageLoader.ImageLoadListener loadListener) {
             ImageSpec spec = null;
             synchronized (lock) {
-                for (int i = 0; i < queue.size(); i++) {
+                for (int i = 0; i < queue.size(); i++) {        // remove from deep deep blue 
                     if (queue.get(i).id.equals(id)) {
                         spec = queue.remove(i);
                         break;
@@ -1067,7 +1099,7 @@ public class Atlas {
                     spec.listener = loadListener;
                     spec.gif = gif;
                 }
-                queue.add(0, spec);
+                queue.add(0, spec);                             // and put it to the surface in front of all 
                 lock.notifyAll();
             }
             if (debug) Log.w(TAG, "requestBitmap() cache: " + cache.size() + ", queue: " + queue.size() + ", id: " + id + ", reqs: " + requiredWidth + "x" + requiredHeight);
@@ -1088,9 +1120,9 @@ public class Atlas {
             
             public String toString() {
                 StringBuilder sb = new StringBuilder();
-                sb.append("id: ").append(id);
-                sb.append(", required: ").append(requiredWidth).append("x").append(requiredHeight);
-                sb.append(", original: ").append(originalWidth).append("x").append(originalHeight);
+                sb.append(" .o[").append(originalWidth).append("x").append(originalHeight).append("]");
+                if (requiredWidth != 0 || requiredHeight != 0) sb.append(", .r[").append(requiredWidth).append("x").append(requiredHeight).append("]");
+                sb.append(" .id: ").append(id);
                 sb.append(gif ? ", gif" : "");
                 sb.append(", progress: ").append(downloadProgress);
                 return sb.toString();
