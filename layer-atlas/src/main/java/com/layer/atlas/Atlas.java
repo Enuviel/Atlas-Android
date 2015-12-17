@@ -166,7 +166,7 @@ public class Atlas {
         Drawable result;
         if (imageFile != null && imageFile.exists() && !imageFile.isDirectory()) {
             result = new Drawable(url, imageFile);
-            imageLoader.requestImage(url, result.fileStreamProvider, result);
+            result.requestInflate();
         } else {
             result = new Drawable(url);
             downloadQueue.schedule(url, imageFile, result);
@@ -179,7 +179,7 @@ public class Atlas {
      */
     public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
         private static final String TAG = Drawable.class.getSimpleName();
-        private static final boolean debug = true;
+        private static final boolean debug = false;
         private static final boolean debugDraw = false;
         private static final Paint debugPaintDwnld = new Paint();
         private static final Paint debugPaintInflt = new Paint();
@@ -257,7 +257,7 @@ public class Atlas {
         public void onDownloadComplete(String url, File file) {
             this.from = file;
             this.fileStreamProvider = new FileStreamProvider(from);
-            imageLoader.requestImage(id, fileStreamProvider, this);
+            requestInflate();
             
             invalidate();
         }
@@ -265,8 +265,12 @@ public class Atlas {
         @Override
         public void onImageLoaded(ImageLoader.ImageSpec spec) {
             this.spec = spec;
-            this.inflatedAt = System.currentTimeMillis();
-            if (debug) Log.w(TAG, "onImageLoaded()      spec: " + spec + ", callback: " + getCallback());
+            long now = System.currentTimeMillis();
+            if (debug) Log.w(TAG, "onImageLoaded()      " 
+                                  + (inflatedAt != 0 ? "inlatedAt: [" + (now - inflatedAt) + " -> 0]" : "")  
+                                  + " spec: " + spec + ", callback: " + getCallback());
+            //if (debug) Log.w(TAG, "onImageLoaded()      spec: " + spec + ", callback: " + getCallback());
+            if (inflatedAt == 0) this.inflatedAt = now;
             invalidate();
         }
         
@@ -328,7 +332,12 @@ public class Atlas {
             if (debug) Log.d(TAG, "draw() id: " + id + ", callback: " + getCallback());
             Bitmap bmp = (Bitmap) imageLoader.getImageFromCache(id);
             if (bmp != null) {
-                long age = System.currentTimeMillis() - inflatedAt;
+                long now = System.currentTimeMillis();
+                
+                // bmp may be available when drawable is new (inflatedAt = 0), so set "inflated" somewhen in the past
+                if (inflatedAt == 0) inflatedAt = now - (FADING_MILLIS * 2);   
+                
+                long age = now - inflatedAt;
                 int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
                 workPaint.setAlpha(alpha);
                 if (debug) Log.d(TAG, "draw() age: " + age + ", alpha: " + alpha);
@@ -336,9 +345,11 @@ public class Atlas {
                 if (age < FADING_MILLIS) invalidateSelf();
             } else {
                 if (debug) Log.d(TAG, "draw() no bitmap, request id: " + id);
-                if (fileStreamProvider != null) {                   // only when file is fetched
-                    imageLoader.requestImage(id, fileStreamProvider, this);
-                }
+                
+                // if we draw empty bitmap, need to animate appeareance after it is inflated
+                inflatedAt = 0;
+                
+                requestInflate();
             }
             if (debugDraw) {
                 if (bmp != null) {
@@ -348,6 +359,22 @@ public class Atlas {
                 } else {
                     Tools.drawRect(getBounds().left, getBounds().top, 10, 10, debugPaintInflt, debugPaintStroke, canvas);
                 }
+            }
+        }
+
+        /** only when file is fetched and not scheduled yet. supports following scenarios: 
+         * - drawable is new, bmp is not available non-scheduled
+         * - drawable is new, bmp is not available,    scheduled
+         * - drawable is new, bmp is already inflated  
+         * - drawable has bmp before, but now bmp is not available, non-scheduled
+         * - drawable has bmp before, but now bmp is not available,     scheduled
+         */
+        private void requestInflate() {
+            // if already schedule - don't schedule again. 
+            // XXX: if two drawables schedule same image, one of them wouldn't be notified
+            
+            if (fileStreamProvider != null) {
+                imageLoader.requestImage(id, fileStreamProvider, this);
             }
         }
         
@@ -893,8 +920,9 @@ public class Atlas {
         
         private volatile boolean shutdownLoader = false;
         private final Thread processingThread;
-        private final Object lock = new Object();
+        private final Object loaderMonitor = new Object();
         private final ArrayList<ImageSpec> queue = new ArrayList<ImageSpec>();
+        private ImageSpec inProgress = null;
         
         /** image_id -> Bitmap | Movie */
         private LinkedHashMap<Object, ImageCacheEntry> cache = new LinkedHashMap<Object, ImageCacheEntry>(40, 1f, true) {
@@ -930,22 +958,16 @@ public class Atlas {
                     ImageSpec spec = null;
                     // search bitmap ready to inflate
                     // wait for queue
-                    synchronized (lock) {
-                        while (spec == null && !shutdownLoader) {
+                    synchronized (loaderMonitor) {
+                        while (!shutdownLoader && (spec = nextSpec()) == null) {
                             try {
-                                lock.wait();
-                                if (shutdownLoader) return;
-                                // picking from queue
-                                for (int i = 0; i < queue.size(); i++) {
-                                    if (queue.get(i).inputStreamProvider.ready()) { // ready to inflate
-                                        spec = queue.remove(i);
-                                        break;
-                                    }
-                                }
+                                loaderMonitor.wait();
                             } catch (InterruptedException e) {}
                         }
+                        if (shutdownLoader) return;
                     }
                     
+                    inProgress = spec;
                     Object bitmapOrMovie = null;
                     if (spec.gif) {
                         InputStream is = spec.inputStreamProvider.getInputStream();
@@ -1010,7 +1032,7 @@ public class Atlas {
                     }
 
                     // decoded
-                    synchronized (lock) {
+                    synchronized (loaderMonitor) {
                         if (bitmapOrMovie != null) {
                             ImageCacheEntry imageCore = new ImageCacheEntry(bitmapOrMovie, spec.originalWidth, spec.originalHeight, spec.inputStreamProvider);
                             cache.put(spec.id, imageCore);
@@ -1018,8 +1040,11 @@ public class Atlas {
                         } else if (spec.retries < BITMAP_DECODE_RETRIES) {
                             spec.retries++;
                             queue.add(0, spec);         // schedule retry
-                            lock.notifyAll();
-                        } /*else forget about this image, never put it back in queue */
+                            loaderMonitor.notifyAll();
+                        } /*else {
+                            forget about this image, never put it back in queue 
+                        }*/
+                        inProgress = null;
                     }
    
                     if (debug) Log.w(TAG, "decodeImage()   cache: " + cache.size() + ", queue: " + queue.size() + ", id: " + spec.id);
@@ -1075,7 +1100,7 @@ public class Atlas {
          * @return - byteCount of removed bitmap if bitmap found. <bold>-1</bold> otherwise
          */
         private int removeEldest() {
-            synchronized (lock) {
+            synchronized (loaderMonitor) {
                 if (cache.size() > 0) {
                     Map.Entry<Object, ImageCacheEntry> entry = cache.entrySet().iterator().next();
                     Object bmp = entry.getValue().bitmapOrMovie;
@@ -1118,10 +1143,11 @@ public class Atlas {
          */
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, int requiredWidth, int requiredHeight, boolean gif, ImageLoader.ImageLoadListener loadListener) {
             ImageSpec spec = null;
-            synchronized (lock) {
+            synchronized (loaderMonitor) {
                 for (int i = 0; i < queue.size(); i++) {        // remove from deep deep blue 
                     if (queue.get(i).id.equals(id)) {
                         spec = queue.remove(i);
+                        if (debug) Log.w(TAG, "requestImage() found scheduled: " + spec + ", from: " + Dt.printStackTrace());
                         break;
                     }
                 }
@@ -1142,10 +1168,39 @@ public class Atlas {
                     spec.originalHeight = imageEntry.originalHeight;
                 }
                 queue.add(0, spec);                             // and put it to the surface in front of all 
-                lock.notifyAll();
+                loaderMonitor.notifyAll();
             }
             if (debug) Log.w(TAG, "requestBitmap() cache: " + cache.size() + ", queue: " + queue.size() + ", id: " + id + ", reqs: " + requiredWidth + "x" + requiredHeight);
             return spec;
+        }
+        
+        /** pick first spec in queue that has inputstream ready */
+        private ImageSpec nextSpec() {
+            synchronized (loaderMonitor) {
+                // picking from queue
+                for (int i = 0; i < queue.size(); i++) {
+                    ImageSpec imageSpec = queue.get(i);
+                    if (imageSpec.inputStreamProvider.ready()) { // ready to inflate
+                        return queue.remove(i);
+                    }
+                }
+                return null;
+            }
+        }
+        
+        /** @return imageSpec if image is scheduled, null otherwise */
+        public ImageSpec getScheduled(Object id) { 
+            synchronized (loaderMonitor) {
+                if (inProgress != null && inProgress.id.equals(id)) return inProgress;
+                // picking from queue
+                for (int i = 0; i < queue.size(); i++) {
+                    ImageSpec imageSpec = queue.get(i);
+                    if (imageSpec.id.equals(id)) { // ready to inflate
+                        return imageSpec;
+                    }
+                }
+                return null;
+            }
         }
         
         /** 
@@ -1206,7 +1261,7 @@ public class Atlas {
     public static class DownloadQueue {
         private static final String TAG = DownloadQueue.class.getSimpleName();
         
-        private static final Object queueMonitor = new Object();
+        private final Object queueMonitor = new Object();
         private final LinkedList<Entry> queue = new LinkedList<Atlas.DownloadQueue.Entry>();
         private final HashMap<String, Entry> scheduledEntries = new HashMap<String, Atlas.DownloadQueue.Entry>();
         private final HashMap<String, Entry> inProgress = new HashMap<String, Atlas.DownloadQueue.Entry>();
