@@ -15,6 +15,7 @@
  */
 package com.layer.atlas;
 
+import android.animation.TimeInterpolator;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
@@ -33,6 +34,7 @@ import android.util.Log;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.animation.AccelerateDecelerateInterpolator;
 
 import com.layer.atlas.Atlas.Tools;
 
@@ -645,9 +647,20 @@ public class AtlasImageView2 extends View {
         invalidate();
     }
     
+    public void setPosition(Position pos) {
+        pos.set(pos);
+        invalidate();
+    }
+    
+    /** @return copy of view's content position */
+    public Position getPosition() {
+        return pos.copy();
+    }
+    
     private Move currentMove;
     private long currentMoveStartedAt;
     
+    /** Use {@link MoveTo} to animate content between 2 positions or subclass {@link Move} */
     public void move(Move move) {
         this.currentMove = move;
         this.currentMoveStartedAt = System.currentTimeMillis();
@@ -655,6 +668,14 @@ public class AtlasImageView2 extends View {
     }
     
     public static abstract class Move {
+        
+        /** 
+         * Use [ (currentTime - startedAt) / duration ] to calculate progress
+         * 
+         * @param result - put result values of offsets and zoom here
+         * @param currentTime - System.currentTimeMillis()
+         * @param startedAt   - when started  
+         */
         public abstract boolean handleMove(Position result, long currentTime, long startedAt);
     }
     
@@ -688,11 +709,84 @@ public class AtlasImageView2 extends View {
             this.y      = from.y;
         }
         
+        public Position xOffset(float x) {
+            this.x = x;
+            return this;
+        }
+        
+        public Position yOffset(float y) {
+            this.y = y;
+            return this;
+        }
+        
+        public Position zoom(float zoom) {
+            this.zoom = zoom;
+            return this;
+        }
+        
+        public float getX() {
+            return x;
+        }
+        
+        public float getY() {
+            return y;
+        }
+        
+        public float getZoom() {
+            return zoom;
+        }
+        
         @Override
         public String toString() {
             return String.format("Zoom: %.2f at: %.1fx%.1f", zoom, x, y);
         }
         
+    }
+    
+    public static class MoveTo extends Move {
+        
+        private Position from;
+        private Position to;
+        private long duration;
+        private TimeInterpolator interpolator = new AccelerateDecelerateInterpolator();
+        
+        public boolean handleMove(Position result, long currentTime, long startedAt) {
+            
+            float progressTime = 1.0f * (currentTime - startedAt) / duration;
+            if (progressTime > 1.0f) progressTime = 1.0f;
+            float progress = interpolator.getInterpolation(progressTime);
+            
+            float zoom = from.getZoom() + (to.getZoom() - from.getZoom()) * progress;
+            float x = from.getX() + (to.getX() - from.getX()) * progress;
+            float y = from.getY() + (to.getY() - from.getY()) * progress;
+            
+            if (debug) Log.w(TAG, "handleMove() new: " + x + ", " + y + ", time: " + (currentTime - startedAt) 
+                    + ", progress: " + progress + ", " + progressTime + ", from: " + from + " -> " + to);
+            
+            result.xOffset(x).yOffset(y).zoom(zoom);
+            
+            return currentTime - startedAt < duration;
+        }
+        
+        public MoveTo from(Position from) {
+            this.from = from;
+            return this;
+        }
+        
+        public MoveTo to(Position to) {
+            this.to = to;
+            return this;
+        }
+        
+        public MoveTo setDuration(long duration) {
+            this.duration = duration;
+            return this;
+        }
+        
+        public MoveTo setInterpolator(TimeInterpolator interpolator) {
+            this.interpolator = interpolator;
+            return this;
+        }
     }
     
 }

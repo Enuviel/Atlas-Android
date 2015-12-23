@@ -812,6 +812,60 @@ public class Atlas {
             } catch (Exception ignored) {}
         }
 
+        public static Rect getViewRectOnScreen(View of, Rect to) {
+            int[] locationOnScreen = new int[2];
+            of.getLocationOnScreen(locationOnScreen);
+            
+            Rect result = to;
+            
+            if (to == null) result = new Rect();
+            
+            result.left = locationOnScreen[0];
+            result.top  = locationOnScreen[1];
+            result.right = locationOnScreen[0] + of.getWidth();
+            result.bottom = locationOnScreen[1] + of.getHeight();
+            
+            return result;
+        }
+
+        public static Rect getDrawableRectOnScreen(ImageView view) {
+            android.graphics.drawable.Drawable d = view.getDrawable();
+            if (d == null) return null;
+            
+            Rect vRect = getViewRectOnScreen(view, null);
+            switch (view.getScaleType()) {
+                case CENTER_CROP :
+                    float dW = d.getIntrinsicWidth();
+                    float dH = d.getIntrinsicHeight();
+                    float imgW = view.getWidth();
+                    float imgH = view.getHeight();
+                    
+                    float dRatio = dW / dH;
+                    float iRatio = imgW / imgH;
+                    
+                    float scale;
+                    if (dRatio < iRatio) {              // view wider, use width
+                        scale = 1.0f * imgW / dW;       //  scale * drawableW -> imgWidth
+                    } else {                            // drawable wider, use height
+                        scale = 1.0f * imgH / dH;       //  scale * drawableH -> imgHeight
+                    }
+                    
+                    
+                    int scaledW = (int) (dW * scale);
+                    int scaledH = (int) (dH * scale);
+                    
+                    Rect dRect = new Rect();
+                    dRect.left  = vRect.left  - (scaledW - vRect.width()) / 2;
+                    dRect.top   = vRect.top  - (scaledH - vRect.height()) / 2;
+                    dRect.right = vRect.right + (scaledW - vRect.width()) / 2;
+                    dRect.bottom  = vRect.bottom  + (scaledH - vRect.height()) / 2;
+                    
+                    return dRect;
+                    
+            }
+            return vRect;
+        }
+
     }
 
     /**
