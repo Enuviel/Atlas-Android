@@ -227,7 +227,7 @@ public class Atlas {
         File from;
         FileStreamProvider fileStreamProvider;
         ImageLoader.ImageSpec spec;
-        Paint workPaint = new Paint();
+        Paint workPaint = new Paint(); 
         long inflatedAt = 0;
 
         private static final int FADING_MILLIS = 333;
@@ -342,6 +342,10 @@ public class Atlas {
                 workPaint.setAlpha(alpha);
                 if (debug) Log.d(TAG, "draw() age: " + age + ", alpha: " + alpha);
                 canvas.drawBitmap(bmp, null, getBounds(), workPaint );
+                if (        (getBounds().width() > bmp.getWidth()   && spec != null && bmp.getWidth() < spec.originalWidth)
+                        ||  (getBounds().height() > bmp.getHeight() && spec != null && bmp.getHeight() < spec.originalHeight)) {
+                    requestInflate();
+                }
                 if (age < FADING_MILLIS) invalidateSelf();
             } else {
                 if (debug) Log.d(TAG, "draw() no bitmap, request id: " + id);
@@ -370,11 +374,20 @@ public class Atlas {
          * - drawable has bmp before, but now bmp is not available,     scheduled
          */
         private void requestInflate() {
-            // if already schedule - don't schedule again. 
+            // if already scheduled - don't schedule again. 
             // XXX: if two drawables schedule same image, one of them wouldn't be notified
             
             if (fileStreamProvider != null) {
-                imageLoader.requestImage(id, fileStreamProvider, this);
+                int requiredWidth = getBounds().width();
+                int requiredHeight = getBounds().height();
+                
+                if (requiredWidth == defaultWidth || requiredHeight == defaultHeight)  {
+                    if (debug) Log.w(TAG, "requestInflate() small boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id);
+                    imageLoader.requestImage(id, fileStreamProvider, this);
+                } else {
+                    if (debug) Log.w(TAG, "requestInflate()       boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id);
+                    imageLoader.requestImage(id, fileStreamProvider, requiredWidth, requiredHeight, false, this);
+                }
             }
         }
         
@@ -1066,7 +1079,7 @@ public class Atlas {
                         try {
                             bmp = BitmapFactory.decodeStream(streamForBitmap, null, decodeOpts);
                         } catch (OutOfMemoryError e) {
-                            if (debug) Log.w(TAG, "decodeImage() out of memory. remove eldest");
+                            if (debug) Log.w(TAG, "decodeImage() out of memory. remove eldest. id: " + spec.id);
                             removeEldest();
                             System.gc();
                         }

@@ -105,7 +105,10 @@
         <attr name="indicatorTextTypeface"/>
         <attr name="indicatorTextStyle"/>
     </declare-styleable>
-
+    
+    <declare-styleable name="AtlasFrameLayout">
+        <attr name="maskDrawable" format="reference" />
+    </declare-styleable>
 
     <!-- ############################## -->
     <!-- Default Atlas Component Styles -->
