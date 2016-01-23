@@ -16,6 +16,7 @@
 package com.layer.atlas;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -24,6 +25,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -35,6 +38,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
 
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
@@ -232,15 +238,26 @@ public class Atlas {
 
         private static final int FADING_MILLIS = 333;
 
-        /** @param {@link #id} - must be specified for correct work */
-        protected Drawable(String id){
+        /** 
+         * Creates {@link Drawable} ready to download and display.
+         * {@link #schedule(DownloadQueue)} needs to be called to download file in order to display it.
+         * <p>If file exists, use {@link Drawable#Drawable(String, File)} to avoid download
+         * 
+         * @param {@link #id} - must be specified for correct work 
+         */
+        public Drawable(String id){
             this.id = id; 
         }
         
-        /** @param imageId - is used to address objects in cache */
+        /** 
+         * Creates {@link Drawable} from local file
+         * 
+         * @param imageId - is used to address objects in cache 
+         */
         public Drawable(String imageId, File from) {
             if (imageId == null) throw new IllegalArgumentException("Drawable .id cannot be null");
             if (from == null) throw new IllegalArgumentException("file must not be null");
+            if (from.exists() && from.isDirectory()) throw new IllegalArgumentException("Specified file is directory and cannot be used [" + from.getAbsolutePath()+ "]");
 
             this.id = imageId;
             this.from = from;
@@ -250,6 +267,18 @@ public class Atlas {
         public Drawable defaultSize(int width, int height) {
             this.defaultWidth  = width;
             this.defaultHeight = height;
+            return this;
+        }
+        
+        /** schedule download file to default location */
+        public Drawable schedule(DownloadQueue queue) {
+            queue.schedule(id, this);
+            return this;
+        }
+        
+        /** schedule download to specific location */
+        public Drawable schedule(DownloadQueue queue, File toFile) {
+            queue.schedule(id, toFile, this);
             return this;
         }
 
@@ -695,13 +724,97 @@ public class Atlas {
         public static String toStringSpec(int widthSpec, int heightSpec) {
             return toStringSpec(widthSpec) + "|" + toStringSpec(heightSpec);
         }
+        
+        public static final String HTTP_GET = "GET";
+        public static final String HTTP_POST = "POST";
+        
+        public static boolean downloadHttpToFile(String url, File file, SSLSocketFactory sslFactory) {
+            return downloadHttpToFile(url, file, HTTP_GET, null, sslFactory); 
+        }
+        
+        public static boolean downloadHttpToFile(String url, File file, String method, byte[] body, SSLSocketFactory sslFactory) {
+            if (url == null) Log.e(TAG, "downloadHttpToFile() url is null, file: " + file);
+            
+            int timeout = 8000;
+            
+            HttpURLConnection httpConn = null;
+            try {
+                URL uRL = new URL(url);
+                
+                if (url.startsWith("https://")) {
+                    httpConn = (HttpsURLConnection) uRL.openConnection();
+                    ((HttpsURLConnection) httpConn).setSSLSocketFactory(sslFactory);                    
+                } else {
+                    httpConn = (HttpURLConnection) uRL.openConnection();
+                }
+                httpConn.setConnectTimeout(timeout);
+                httpConn.setReadTimeout(timeout);
+                httpConn.setRequestMethod(method);
+                httpConn.setDoOutput(true);
+                if (HTTP_POST.equals(method) && body != null) {
+                    httpConn.setDoInput(true);
+                    OutputStream os = httpConn.getOutputStream();
+                    os.write(body);
+                    os.close();
+                }
+
+                int responseCode = httpConn.getResponseCode();
+                if (responseCode == 301) {
+                    String location = httpConn.getHeaderField("Location");
+                    Log.e(TAG, "Redirect [" + location + "]" + " from url: [" + url + "]");
+                }
+                if (responseCode >= 300 || responseCode < 200) {
+                    Log.e(TAG, "Expected status 200, but got " + responseCode + ", message: " + httpConn.getResponseMessage() + ", url: [" + url + "]");
+                    return false;
+                }
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(httpConn.getInputStream().available());
+                
+            } catch (IOException e) {
+                Log.e(TAG, "downloadToFile() cannot execute http request, url: [" + url + "]", e);
+                return false;
+            }
+            
+            File dir = file.getParentFile();
+            if (!dir.exists() && !dir.mkdirs()) {
+                Log.e(TAG, "Could not create folders, url: [" + url + "] dir: " + dir.getAbsolutePath());
+                return false;
+            }
+            
+            File tempFile = new File(file.getAbsolutePath() + ".download");
+            
+            try {
+                streamCopyAndClose(httpConn.getInputStream(), new FileOutputStream(tempFile, false));
+            } catch (IOException e) {
+                if (debug) Log.e(TAG, "downloadToFile() cannot extract content from http response for [" + url + "]", e);
+            }
+        
+            if (tempFile.length() != httpConn.getContentLength()) {
+                tempFile.delete();
+                Log.e(TAG, "downloadToFile() File size mismatch for [" + url + "] "
+                         + " expected: " + httpConn.getContentLength() 
+                         + " actual: " + tempFile.length()
+                         + " path: " + tempFile.getAbsolutePath());
+                return false;
+            }
+            
+            // last step
+            if (tempFile.renameTo(file)) {
+                if (debug) Log.w(TAG, "downloadToFile() Successfully downloaded file: " + file.getAbsolutePath());
+                return true;
+            } else {
+                Log.e(TAG, "downloadToFile() Could not rename temp file: " + tempFile.getAbsolutePath() + " to: " + file.getAbsolutePath());
+                return false;
+            }
+            
+        }
 
         public static boolean downloadHttpToFile(String url, File file) {
             if (url == null) Log.e(TAG, "downloadHttpToFile() url is null, file: " + file);
             HttpGet get = new HttpGet(url);
             HttpResponse response;
             try {
-                response = (new DefaultHttpClient()).execute(get);
+                DefaultHttpClient httpClient = new DefaultHttpClient();
+                response = httpClient.execute(get);
                 if (HttpStatus.SC_OK != response.getStatusLine().getStatusCode()) {
                     Log.e(TAG, "Expected status 200, but got " + response.getStatusLine().getStatusCode() + ", url: [" + url + "]");
                     return false;
@@ -1079,8 +1192,13 @@ public class Atlas {
                         try {
                             bmp = BitmapFactory.decodeStream(streamForBitmap, null, decodeOpts);
                         } catch (OutOfMemoryError e) {
-                            if (debug) Log.w(TAG, "decodeImage() out of memory. remove eldest. id: " + spec.id);
-                            removeEldest();
+                            long requiredBytes = 4 * originalOpts.outWidth * originalOpts.outHeight / sampleSize;
+                            if (debug) Log.w(TAG, "decodeImage() out of memory, need " + requiredBytes 
+                                    + " bytes for " + requiredWidth + "x" + requiredHeight
+                                    + " orig " + originalOpts.outWidth + "x" + originalOpts.outHeight + " ss: " + sampleSize
+                                    + " images: " + cache.size() + ", remove eldest. id: " + spec.id);
+                            int bytesClean = removeEldest(requiredBytes);
+                            if (true) Log.w(TAG, "decodeImage()         bytes clean " + bytesClean);
                             System.gc();
                         }
                         Tools.closeQuietly(streamForBitmap);
@@ -1180,6 +1298,20 @@ public class Atlas {
                     return -1;
                 }
             }
+        }
+        
+        private int removeEldest(long bytesToFree) {
+            synchronized (loaderMonitor) {
+                int totalClean = 0;
+                while (cache.size() > 0) {
+                    int clean = removeEldest();
+                    if (clean < 1) return totalClean;
+                    totalClean += clean;
+                    if (totalClean > bytesToFree) return totalClean;
+                }
+                return totalClean;
+            }
+            
         }
                 
         /**
@@ -1334,6 +1466,8 @@ public class Atlas {
         private final HashMap<String, Entry> inProgress = new HashMap<String, Atlas.DownloadQueue.Entry>();
         private Thread[] workers;
         
+        private SSLSocketFactory sslSocketFactory = null;
+        
         public DownloadQueue() {
             this(1);
         }
@@ -1422,7 +1556,16 @@ public class Atlas {
                             downloadTo = File.createTempFile(String.valueOf(System.currentTimeMillis()), ".tmp");
                             next.file = downloadTo;
                         }
-                        if (Tools.downloadHttpToFile(next.url, downloadTo)) {
+                        
+                        boolean downloaded = false;
+                        
+                        if (sslSocketFactory != null) {
+                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo, sslSocketFactory);
+                        } else {
+                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo);
+                        }
+
+                        if (downloaded) {
                             for (CompleteListener onComplete : next.completeListeners) {
                                 onComplete.onDownloadComplete(next.url, downloadTo);
                             }
@@ -1453,6 +1596,12 @@ public class Atlas {
             synchronized (queueMonitor) {
                 Entry entry = inProgress.get(url);
                 return entry;
+            }
+        }
+        
+        public void setSSLSocketFactory(SSLSocketFactory sslFactory) {
+            synchronized (queueMonitor) {
+                this.sslSocketFactory = sslFactory;
             }
         }
         

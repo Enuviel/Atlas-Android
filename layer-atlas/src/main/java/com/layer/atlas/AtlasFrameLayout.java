@@ -49,7 +49,7 @@ import com.layer.atlas.Atlas.Tools;
 public class AtlasFrameLayout extends FrameLayout {
 
     private static final String TAG = AtlasFrameLayout.class.getSimpleName();
-    private static final boolean debug = true;
+    private static final boolean debug = false;
     
     private float[] corners = new float[] { 0, 0, 0, 0 };
     private boolean refreshShape = true;
@@ -187,7 +187,7 @@ public class AtlasFrameLayout extends FrameLayout {
         }
         
     }
-
+    
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -349,5 +349,54 @@ public class AtlasFrameLayout extends FrameLayout {
     private int getPaddingLeftWithForeground() {
         return 0;
     }
+
+    @Override
+    public void addView(View view, int index, android.view.ViewGroup.LayoutParams params) {
+        if (debug) Log.w(TAG, "addView() view: " + desc(view) + " index: " + index+ " params: " + params + ", - - - - " + view);
+        super.addView(view, index, params);
+    }
+
+    @Override
+    public void removeView(View view) {
+        String viewDesc = view.getTag() == null ? view.getClass().getSimpleName() : "" + view.getTag();
+        if (debug) Log.w(TAG, "removeView() view: " + desc(view) + ", - - - - " + view);
+        super.removeView(view);
+    }
+
+    @Override
+    public void removeViewInLayout(View view) {
+        String viewDesc = view.getTag() == null ? view.getClass().getSimpleName() : "" + view.getTag();
+        if (debug) Log.w(TAG, "removeViewInLayout() view: " + desc(view) + ", - - - - " + view);
+        super.removeViewInLayout(view);
+    }
+
+    @Override
+    public void removeViewsInLayout(int start, int count) {
+        if (debug) Log.d(TAG, "removeViewsInLayout() start: " + start+ " count: " + count);
+        super.removeViewsInLayout(start, count);
+    }
+
+    @Override
+    public void removeViewAt(int index) {
+        if (debug) Log.d(TAG, "removeViewAt() index: " + index);
+        super.removeViewAt(index);
+    }
+
+    @Override
+    public void removeViews(int start, int count) {
+        if (debug) Log.d(TAG, "removeViews() start: " + start+ " count: " + count);
+        super.removeViews(start, count);
+    }
+    
+    private static String desc(View view) {
+        String viewDesc = view.getTag() == null ? view.getClass().getSimpleName() : "" + view.getTag();
+        return viewDesc;
+    }
+    
+    ///------------
+    
+    
+    
+    
 
 }
