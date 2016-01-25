@@ -16,7 +16,6 @@
 package com.layer.atlas;
 
 import java.io.BufferedInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -743,16 +742,22 @@ public class Atlas {
                 
                 if (url.startsWith("https://")) {
                     httpConn = (HttpsURLConnection) uRL.openConnection();
-                    ((HttpsURLConnection) httpConn).setSSLSocketFactory(sslFactory);                    
+                    if (sslFactory != null) {
+                        ((HttpsURLConnection) httpConn).setSSLSocketFactory(sslFactory);                    
+                    }
                 } else {
                     httpConn = (HttpURLConnection) uRL.openConnection();
                 }
                 httpConn.setConnectTimeout(timeout);
                 httpConn.setReadTimeout(timeout);
                 httpConn.setRequestMethod(method);
-                httpConn.setDoOutput(true);
+                // some servers rejects requests without user-agent with status 400 
+                httpConn.addRequestProperty("User-Agent", "Atlas-Android 1.0");      
+                
+                //httpConn.setDoInput(true);    // assume it can read content by default
+                
                 if (HTTP_POST.equals(method) && body != null) {
-                    httpConn.setDoInput(true);
+                    httpConn.setDoOutput(true);
                     OutputStream os = httpConn.getOutputStream();
                     os.write(body);
                     os.close();
@@ -767,7 +772,6 @@ public class Atlas {
                     Log.e(TAG, "Expected status 200, but got " + responseCode + ", message: " + httpConn.getResponseMessage() + ", url: [" + url + "]");
                     return false;
                 }
-                ByteArrayOutputStream baos = new ByteArrayOutputStream(httpConn.getInputStream().available());
                 
             } catch (IOException e) {
                 Log.e(TAG, "downloadToFile() cannot execute http request, url: [" + url + "]", e);
@@ -783,17 +787,20 @@ public class Atlas {
             File tempFile = new File(file.getAbsolutePath() + ".download");
             
             try {
-                streamCopyAndClose(httpConn.getInputStream(), new FileOutputStream(tempFile, false));
+                InputStream inputStream = httpConn.getInputStream();
+                streamCopyAndClose(inputStream, new FileOutputStream(tempFile, false));
             } catch (IOException e) {
                 if (debug) Log.e(TAG, "downloadToFile() cannot extract content from http response for [" + url + "]", e);
+            } finally {
+                httpConn.disconnect();
             }
         
-            if (tempFile.length() != httpConn.getContentLength()) {
-                tempFile.delete();
+            if (httpConn.getHeaderField("Content-Length") != null && httpConn.getContentLength() != tempFile.length()) {
                 Log.e(TAG, "downloadToFile() File size mismatch for [" + url + "] "
                          + " expected: " + httpConn.getContentLength() 
                          + " actual: " + tempFile.length()
                          + " path: " + tempFile.getAbsolutePath());
+                tempFile.delete();
                 return false;
             }
             
@@ -808,6 +815,7 @@ public class Atlas {
             
         }
 
+        /** @deprecated use {@link #downloadHttpToFile(String, File, String, byte[], SSLSocketFactory)}*/
         public static boolean downloadHttpToFile(String url, File file) {
             if (url == null) Log.e(TAG, "downloadHttpToFile() url is null, file: " + file);
             HttpGet get = new HttpGet(url);
@@ -1559,10 +1567,10 @@ public class Atlas {
                         
                         boolean downloaded = false;
                         
-                        if (sslSocketFactory != null) {
+                        if (true || sslSocketFactory != null) {
                             downloaded = Tools.downloadHttpToFile(next.url, downloadTo, sslSocketFactory);
                         } else {
-                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo);
+//                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo);
                         }
 
                         if (downloaded) {
