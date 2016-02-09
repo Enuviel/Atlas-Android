@@ -751,10 +751,9 @@ public class Atlas {
                 httpConn.setConnectTimeout(timeout);
                 httpConn.setReadTimeout(timeout);
                 httpConn.setRequestMethod(method);
+                httpConn.setDoInput(true);
                 // some servers rejects requests without user-agent with status 400 
-                httpConn.addRequestProperty("User-Agent", "Atlas-Android 1.0");      
-                
-                //httpConn.setDoInput(true);    // assume it can read content by default
+                httpConn.addRequestProperty("User-Agent", "Atlas-Android 1.0");    
                 
                 if (HTTP_POST.equals(method) && body != null) {
                     httpConn.setDoOutput(true);
@@ -1270,23 +1269,29 @@ public class Atlas {
         }
     
         public Object getImageFromCache(Object id) {
-            ImageCacheEntry imageEntry = cache.get(id);
-            if (imageEntry == null) return null;
-            return imageEntry.bitmapOrMovie;
+            synchronized (loaderMonitor) {
+                ImageCacheEntry imageEntry = cache.get(id);
+                if (imageEntry == null) return null;
+                return imageEntry.bitmapOrMovie;
+            }
         }
         
         /** @return originalImageWidth if image is in cache, 0 otherwise */
         public int getOriginalImageWidth(Object id) {
-            ImageCacheEntry imageEntry = cache.get(id);
-            if (imageEntry == null) return 0;
-            return imageEntry.originalWidth;
+            synchronized (loaderMonitor) {
+                ImageCacheEntry imageEntry = cache.get(id);
+                if (imageEntry == null) return 0;
+                return imageEntry.originalWidth;
+            }
         }
         
         /** @return originalImageHeight if image is in cache, 0 otherwise */
         public int getOriginalImageHeight(Object id) {
-            ImageCacheEntry imageEntry = cache.get(id);
-            if (imageEntry == null) return 0;
-            return imageEntry.originalHeight;
+            synchronized (loaderMonitor) {
+                ImageCacheEntry imageEntry = cache.get(id);
+                if (imageEntry == null) return 0;
+                return imageEntry.originalHeight;
+            }
         }
                 
         /**
