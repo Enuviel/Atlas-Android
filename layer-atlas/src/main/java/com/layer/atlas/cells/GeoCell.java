@@ -108,7 +108,7 @@ public class GeoCell extends Cell implements Atlas.DownloadQueue.CompleteListene
                 spec = Atlas.imageLoader.requestImage(imageId
                         , new Atlas.FileStreamProvider(tileFile)
                         , (int)Tools.getPxFromDp(150, cellContainer.getContext())
-                        , (int)Tools.getPxFromDp(150, cellContainer.getContext()), false, this);
+                        , (int)Tools.getPxFromDp(150, cellContainer.getContext()), false, this, false);
             } else {
                 int width = 300;
                 int height = 300;

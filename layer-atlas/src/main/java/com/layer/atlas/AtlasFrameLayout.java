@@ -86,7 +86,7 @@ public class AtlasFrameLayout extends FrameLayout {
     public AtlasFrameLayout(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
         if (debug) Log.w(TAG, "AtlasFrameLayout() attrs: " + attrs + ", defStyle: " + defStyle);
-        TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.AtlasFrameLayout, 0, 0);
+        TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.AtlasFrameLayout, defStyle, 0);
         try {
             int resourceId = a.getResourceId(R.styleable.AtlasFrameLayout_maskDrawable, 0);
             if (debug) Log.w(TAG, "AtlasFrameLayout() resourceId: " + resourceId);
@@ -103,6 +103,7 @@ public class AtlasFrameLayout extends FrameLayout {
         refreshShape = true;
     }
     
+    /** Mask is applied after all children combined. Background is not masked */
     public void setMask(Drawable maskDrawable) {
         this.maskDrawable = maskDrawable;
         refreshShape = true;

@@ -57,7 +57,7 @@ public class GIFCell extends ImageCell {
         } else if (workingPart.isContentReady()){
             final Uri id = workingPart.getId();
             InputStreamProvider streamProvider = new Atlas.MessagePartBufferedStreamProvider(workingPart); 
-            imageSpec = Atlas.imageLoader.requestImage(id, streamProvider, requiredWidth, requiredHeight, true, this);
+            imageSpec = Atlas.imageLoader.requestImage(id, streamProvider, requiredWidth, requiredHeight, true, this, false);
         }
         return null;
     }

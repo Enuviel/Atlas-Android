@@ -236,7 +236,7 @@ public class ImageCell extends Cell implements LayerProgressListener, ImageLoade
         } else if (workingPart.isContentReady()){
             final Uri id = workingPart.getId();
             final MessagePartStreamProvider streamProvider = new MessagePartStreamProvider(workingPart);
-            imageSpec = Atlas.imageLoader.requestImage(id, streamProvider, requiredWidth, requiredHeight, false, this);
+            imageSpec = Atlas.imageLoader.requestImage(id, streamProvider, requiredWidth, requiredHeight, false, this, false);
         }
         return null;
     }

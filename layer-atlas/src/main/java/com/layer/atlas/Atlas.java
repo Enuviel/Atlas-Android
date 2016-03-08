@@ -64,7 +64,6 @@ import android.graphics.drawable.BitmapDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.DisplayMetrics;
-import android.util.Log;
 import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
@@ -74,6 +73,7 @@ import android.view.Window;
 import android.widget.ImageView;
 
 import com.layer.atlas.Atlas.DownloadQueue.CompleteListener;
+import com.layer.atlas.Dt.Log;
 import com.layer.atlas.cells.GIFCell;
 import com.layer.atlas.cells.GeoCell;
 import com.layer.atlas.cells.ImageCell;
@@ -171,7 +171,9 @@ public class Atlas {
         Drawable result;
         if (imageFile != null && imageFile.exists() && !imageFile.isDirectory()) {
             result = new Drawable(url, imageFile);
-            result.requestInflate();
+            if (result.inflateImmediately) {
+                result.requestInflate();
+            }
         } else {
             result = new Drawable(url);
             downloadQueue.schedule(url, imageFile, result);
@@ -234,6 +236,12 @@ public class Atlas {
         ImageLoader.ImageSpec spec;
         Paint workPaint = new Paint(); 
         long inflatedAt = 0;
+        
+        /** 
+         * if true - inflates bitmap as soon as bitmap's data get available. Otherwise only at first draw.  
+         * Saves heap from images that might be never rendered
+         */
+        private boolean inflateImmediately = false;
 
         private static final int FADING_MILLIS = 333;
 
@@ -285,7 +293,9 @@ public class Atlas {
         public void onDownloadComplete(String url, File file) {
             this.from = file;
             this.fileStreamProvider = new FileStreamProvider(from);
-            requestInflate();
+            if (inflateImmediately) {
+                requestInflate();
+            }
             
             invalidate();
         }
@@ -304,6 +314,10 @@ public class Atlas {
         
         @Override
         public void setBounds(int left, int top, int right, int bottom) {
+            //boolean debug = true;
+            int width = right - left;
+            int height = bottom - top;
+            //if (width > 400 || height > 400) debug = true;
             if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
             super.setBounds(left, top, right, bottom);
         }
@@ -369,8 +383,9 @@ public class Atlas {
                 int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
                 workPaint.setAlpha(alpha);
                 if (debug) Log.d(TAG, "draw() age: " + age + ", alpha: " + alpha);
+                if (bmp.getWidth() > 400 || bmp.getHeight() > 400) if (debug) Log.w(TAG, "draw() huge bmp: " + bmp.getWidth() + "x" + bmp.getHeight() + ", required " + getBounds().width() + "x" + getBounds().height() + ": " + id);
                 canvas.drawBitmap(bmp, null, getBounds(), workPaint );
-                if (        (getBounds().width() > bmp.getWidth()   && spec != null && bmp.getWidth() < spec.originalWidth)
+                if (        (getBounds().width()  > bmp.getWidth()  && spec != null && bmp.getWidth()  < spec.originalWidth)
                         ||  (getBounds().height() > bmp.getHeight() && spec != null && bmp.getHeight() < spec.originalHeight)) {
                     requestInflate();
                 }
@@ -398,8 +413,8 @@ public class Atlas {
          * - drawable is new, bmp is not available non-scheduled
          * - drawable is new, bmp is not available,    scheduled
          * - drawable is new, bmp is already inflated  
-         * - drawable has bmp before, but now bmp is not available, non-scheduled
-         * - drawable has bmp before, but now bmp is not available,     scheduled
+         * - drawable had bmp before, but now bmp is not available, non-scheduled
+         * - drawable had bmp before, but now bmp is not available,     scheduled
          */
         private void requestInflate() {
             // if already scheduled - don't schedule again. 
@@ -414,7 +429,8 @@ public class Atlas {
                     imageLoader.requestImage(id, fileStreamProvider, this);
                 } else {
                     if (debug) Log.w(TAG, "requestInflate()       boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id);
-                    imageLoader.requestImage(id, fileStreamProvider, requiredWidth, requiredHeight, false, this);
+                    boolean decodeOnly = requiredWidth == 0 && requiredHeight == 0;
+                    imageLoader.requestImage(id, fileStreamProvider, requiredWidth, requiredHeight, false, this, decodeOnly);
                 }
             }
         }
@@ -1153,7 +1169,6 @@ public class Atlas {
                         }
                         if (shutdownLoader) return;
                     }
-                    
                     inProgress = spec;
                     Object bitmapOrMovie = null;
                     if (spec.gif) {
@@ -1328,17 +1343,17 @@ public class Atlas {
         }
                 
         /**
-         * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener) 
+         * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener, boolean) 
          */
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, ImageLoader.ImageLoadListener loadListener) {
-            return requestImage(id, streamProvider, 0, 0, false, loadListener);
+            return requestImage(id, streamProvider, 0, 0, false, loadListener, false);
         }
         
         /**
-         * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener) 
+         * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener, boolean) 
          */
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, boolean gif, ImageLoader.ImageLoadListener loadListener) {
-            return requestImage(id, streamProvider, 0, 0, gif, loadListener);
+            return requestImage(id, streamProvider, 0, 0, gif, loadListener, false);
         }
         
         /** 
@@ -1349,11 +1364,12 @@ public class Atlas {
          * @param id                - something you will use to get image from cache later
          * @param streamProvider    - something that provides raw bytes. See {@link Atlas.FileStreamProvider} or {@link Atlas.MessagePartStreamProvider}
          * @param requiredWidth     - 
-         * @param requiredHeight    - provide image dimensions you need to save memory if original dimensions are bigger
+         * @param requiredHeight    - provide image dimensions you need to save memory if original dimensions are bigger. 0 means no requirements, inflate as is
          * @param gif               - android.graphics.Movie would be decoded instead of Bitmap. <b>Warning!</b> {@link Atlas.MessagePartBufferedStreamProvider} must be used 
          * @param loadListener      - something you can use to be notified when image is loaded
+         * @param decodeOnly        - will perform decode only and update {@link ImageSpec#originalWidth} and {@link ImageSpec#originalHeight}
          */
-        public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, int requiredWidth, int requiredHeight, boolean gif, ImageLoader.ImageLoadListener loadListener) {
+        public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, int requiredWidth, int requiredHeight, boolean gif, ImageLoader.ImageLoadListener loadListener, boolean decodeOnly) {
             ImageSpec spec = null;
             synchronized (loaderMonitor) {
                 for (int i = 0; i < queue.size(); i++) {        // remove from deep deep blue 
@@ -1570,13 +1586,7 @@ public class Atlas {
                             next.file = downloadTo;
                         }
                         
-                        boolean downloaded = false;
-                        
-                        if (true || sslSocketFactory != null) {
-                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo, sslSocketFactory);
-                        } else {
-//                            downloaded = Tools.downloadHttpToFile(next.url, downloadTo);
-                        }
+                        boolean downloaded = Tools.downloadHttpToFile(next.url, downloadTo, sslSocketFactory);
 
                         if (downloaded) {
                             for (CompleteListener onComplete : next.completeListeners) {
