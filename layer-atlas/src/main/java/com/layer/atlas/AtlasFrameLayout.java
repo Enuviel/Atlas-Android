@@ -112,12 +112,19 @@ public class AtlasFrameLayout extends FrameLayout {
     
     /** SOFTWARE rendering is required for canvas.clipPath on Android API version lower 18 */
     private void prepareRendering() {
-        if (android.os.Build.VERSION.SDK_INT < 18) {
+        // dispatchDraw() is not called with hardware layer when underlying view invalidates so it doesn't work with Atlas.Drawable
+        if (true|| android.os.Build.VERSION.SDK_INT < 18) {
             setLayerType(LAYER_TYPE_SOFTWARE, null);
             if (debug)  Log.d(TAG, "setSoftwareRendering() software rendering...");
         }
+        // not sure if it has an effect, bitmap is created even if flag is off
+        setDrawingCacheEnabled(false);
     }
     
+    /** 
+     * @deprecated use {@link #setMask(Drawable)} 
+     * <p><b>Note:</b> may be worth to optimize bitmap usage for masks first 
+     */
     public void setCornerRadiusDp(float topLeft, float topRight, float bottomRight, float bottomLeft) {
         this.corners[0] = topLeft;
         this.corners[1] = topRight;
@@ -145,6 +152,10 @@ public class AtlasFrameLayout extends FrameLayout {
         
     }
     
+    /** 
+     * TODO: utilize {@link #getDrawingCache()} created by {@link #buildDrawingCache()} before {@link #onDraw(Canvas)} 
+     * to reuse this bitmap for masks (available only for {@link #LAYER_TYPE_SOFTWARE}  )
+     */
     @Override
     protected void dispatchDraw(Canvas canvas) {
         // clipPath according to shape
@@ -155,7 +166,7 @@ public class AtlasFrameLayout extends FrameLayout {
         if (debug)  Log.d(TAG, "dispatchDraw() drawSize: " + width + "x" + height 
                 + ", measuredSize: " + getMeasuredWidth() + "x" + getMeasuredHeight()
                 + ", size: " + getWidth() + "x" + getHeight()
-                + ", resetShape: " + refreshShape);
+                + ", resetShape: " + refreshShape + ", from: " + Dt.printStackTrace(7));
         
         if (maskDrawable != null) {
             
@@ -349,6 +360,30 @@ public class AtlasFrameLayout extends FrameLayout {
 
     private int getPaddingLeftWithForeground() {
         return 0;
+    }
+    
+    //-------------------  DEBUG PURPOSES STUFF  ----------------------------------
+    public void draw(Canvas canvas) {
+        if (debug) Log.d(TAG, "draw()      .layout from: " + Dt.printStackTrace(7));
+        super.draw(canvas);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (debug) Log.d(TAG, "onDraw()    .layout from: " + Dt.printStackTrace(7));
+        super.onDraw(canvas);
+    }
+    
+    @Override
+    protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
+        if (debug) Log.d(TAG, "drawChild() .layout from: " + Dt.printStackTrace(7));
+        return super.drawChild(canvas, child, drawingTime);
+    }
+    
+    @Override
+    public void invalidate() {
+        if (debug) Log.w(TAG, "invalidate() .layout from: " + Dt.printStackTrace(7));
+        super.invalidate();
     }
 
     @Override

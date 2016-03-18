@@ -37,7 +37,6 @@ import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.os.Handler;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -488,6 +487,22 @@ public class AtlasConversationsList extends FrameLayout implements LayerChangeEv
         }
     }
     
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (debug) Log.w(TAG, "onAttachedToWindow() ready for updates from Layer. called from: " + Dt.printStackTrace());
+        if (layerClient != null) {
+            layerClient.registerEventListener(this);
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        if (debug) Log.w(TAG, "onDetachedFromWindow() unsubscribe from Layer. called from: " + Dt.printStackTrace());
+        layerClient.unregisterEventListener(this);
+    }
+
     public ConversationClickListener getClickListener() {
         return clickListener;
     }

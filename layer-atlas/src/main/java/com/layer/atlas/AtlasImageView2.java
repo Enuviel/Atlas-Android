@@ -25,6 +25,7 @@ import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Paint.Style;
 import android.graphics.PorterDuff.Mode;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -141,6 +142,29 @@ public class AtlasImageView2 extends View {
         debugTextPaint.setTextSize(Tools.getPxFromDp(10, getContext()));
     }
     
+    //
+    // --- tmp debug purposes ----
+    //
+    public void invalidate(Rect dirty) {
+        if (debug) Log.i(TAG, "invalidate() .view rect: " + dirty + ", from: " + Dt.printStackTrace(7));
+        super.invalidate(dirty);
+    }
+    public void invalidate(int l, int t, int r, int b) {
+        if (debug) Log.i(TAG, "invalidate() .view rect: l: " + l+ " t: " + t+ " r: " + r+ " b: " + b + ", from: " + Dt.printStackTrace(7));
+        super.invalidate(l, t, r, b);
+    }
+    public void invalidate() {
+        if (debug) Log.i(TAG, "invalidate() .view       from: " + Dt.printStackTrace(7));
+        super.invalidate();
+    }
+    public void invalidateDrawable(Drawable drawable) {
+        if (debug) Log.w(TAG, "invalidateDrawable() .view drawable: " + drawable + ", from: " + Dt.printStackTrace(7));
+        super.invalidateDrawable(drawable);
+    }
+    //
+    // --- end of tmp debug purposes
+    //
+    
     protected void onDraw(final Canvas canvas) {
         super.onDraw(canvas);
         
@@ -206,7 +230,7 @@ public class AtlasImageView2 extends View {
             workCanvas.drawColor(Color.TRANSPARENT, Mode.CLEAR);            // clean before using
         }
         
-        if (debug) Log.w(TAG, "onDraw() useBitmapBuffer: " + useBitmapBuffer + ", buffer: " + (buffer == null ? "null" : buffer.getWidth() + "x" + buffer.getHeight()) );
+        if (debug) Log.w(TAG, "onDraw() useBitmapBuffer: " + useBitmapBuffer + ", buffer: " + (buffer == null ? "null" : buffer.getWidth() + "x" + buffer.getHeight()) + " from: " + Dt.printStackTrace(20) );
         int saved = workCanvas.save();
         workCanvas.translate(pos.x, pos.y);
         if (debugOutline) workCanvas.drawRect(left, top, right, bottom, debugFillPaint);
@@ -583,6 +607,10 @@ public class AtlasImageView2 extends View {
         }
         setContentWorkDimensions();
         invalidate();
+    }
+    
+    public Drawable getDrawable() {
+        return drawable;
     }
     
     public void setContentDimensions(int contentWidth, int contentHeight) {

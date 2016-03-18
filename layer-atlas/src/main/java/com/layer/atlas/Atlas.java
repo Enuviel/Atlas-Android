@@ -25,6 +25,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.ProtocolException;
 import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -37,6 +39,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
@@ -71,6 +74,7 @@ import android.view.View.MeasureSpec;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.ImageView;
+import android.widget.ImageView.ScaleType;
 
 import com.layer.atlas.Atlas.DownloadQueue.CompleteListener;
 import com.layer.atlas.Dt.Log;
@@ -186,12 +190,26 @@ public class Atlas {
      */
     public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
         private static final String TAG = Drawable.class.getSimpleName();
-        private static final boolean debug = false;
+        private static final boolean debug = true;
         private static final boolean debugDraw = false;
         private static final Paint debugPaintDwnld = new Paint();
         private static final Paint debugPaintInflt = new Paint();
         private static final Paint debugPaintCmplt = new Paint();
         private static final Paint debugPaintStroke = new Paint();
+        
+        //  
+        // --- debug purposes drawable tracker ---
+        //
+        private static volatile int nextAutoId = 0;
+        public static final TreeMap<Integer, Drawable> all = new TreeMap<Integer, Drawable>();
+        /** drawables tracker for debug purposes */
+        private final int autoId = nextAutoId++; 
+        {
+            all.put(autoId, this);
+        }
+        //
+        // ---     end of drawable tracker     ---
+        //
 
         static {
             debugPaintDwnld.setStyle(Style.FILL);
@@ -207,6 +225,7 @@ public class Atlas {
             debugPaintStroke.setColor(Color.BLACK);
         }
         
+        /** Way to force ImageView to re-request image dimensions */
         private static final Handler mainHandler = new Handler(Looper.getMainLooper()) {
             public void handleMessage(android.os.Message msg) {
                 switch (msg.what) {
@@ -241,7 +260,10 @@ public class Atlas {
          * if true - inflates bitmap as soon as bitmap's data get available. Otherwise only at first draw.  
          * Saves heap from images that might be never rendered
          */
-        private boolean inflateImmediately = false;
+        private final boolean inflateImmediately = false;
+        
+        /** provides boundaries */
+        private BoundsProvider boundsProvider;
 
         private static final int FADING_MILLIS = 333;
 
@@ -252,8 +274,11 @@ public class Atlas {
          * 
          * @param {@link #id} - must be specified for correct work 
          */
-        public Drawable(String id){
-            this.id = id; 
+        public Drawable(String imageId){
+            if (imageId == null) throw new IllegalArgumentException("Drawable .id cannot be null");
+            this.id = imageId;
+            boolean debug = true;
+            if (debug) Log.w(TAG, "Drawable() " + autoId + ": " + imageId);
         }
         
         /** 
@@ -262,11 +287,10 @@ public class Atlas {
          * @param imageId - is used to address objects in cache 
          */
         public Drawable(String imageId, File from) {
-            if (imageId == null) throw new IllegalArgumentException("Drawable .id cannot be null");
-            if (from == null) throw new IllegalArgumentException("file must not be null");
-            if (from.exists() && from.isDirectory()) throw new IllegalArgumentException("Specified file is directory and cannot be used [" + from.getAbsolutePath()+ "]");
+            this(imageId);
+            if (from == null) throw new IllegalArgumentException("file must be specified");
+            if (from.exists() && from.isDirectory()) throw new IllegalArgumentException("Specified file is a directory and cannot be used [" + from.getAbsolutePath()+ "]");
 
-            this.id = imageId;
             this.from = from;
             this.fileStreamProvider = new FileStreamProvider(from);
         }
@@ -291,6 +315,7 @@ public class Atlas {
 
         @Override
         public void onDownloadComplete(String url, File file) {
+            if (debug) Log.w(TAG, "onDownloadComplete() id: " + id + ", file: " + file);
             this.from = file;
             this.fileStreamProvider = new FileStreamProvider(from);
             if (inflateImmediately) {
@@ -314,30 +339,84 @@ public class Atlas {
         
         @Override
         public void setBounds(int left, int top, int right, int bottom) {
-            //boolean debug = true;
             int width = right - left;
             int height = bottom - top;
-            //if (width > 400 || height > 400) debug = true;
+            boolean debug = false;
+            if (width > 1600 || height > 1600) debug = true;
             if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
             super.setBounds(left, top, right, bottom);
         }
-
-        @Override
-        public void setBounds(Rect bounds) {
-            if (debug) Log.w(TAG, "setBounds()          " + bounds + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
-            super.setBounds(bounds);
-        }
-
-        @Override
-        public boolean setState(int[] stateSet) {
-            if (debug) Log.w(TAG, "setState()           " + Dt.toString(stateSet) + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
-            return super.setState(stateSet);
-        }
-
+        
         @Override
         protected void onBoundsChange(Rect bounds) {
             if (debug) Log.w(TAG, "onBoundsChange()     " + bounds + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
             super.onBoundsChange(bounds);
+        }
+        
+        public interface BoundsProvider {
+            public int getIntrinsicWidth (Drawable of, int intrinsicWidth, int intrinsicHeight);
+            public int getIntrinsicHeight(Drawable of, int intrinsicWidth, int intrinsicHeight);
+        }
+        
+        public static class ImageViewBounds implements BoundsProvider {
+            private static final String TAG = ImageViewBounds.class.getSimpleName();
+            private static final boolean debug = false;
+            
+            ImageView imageView;
+            
+            public ImageViewBounds(ImageView imageView) {
+                this.imageView = imageView;
+            }
+            
+            public int getIntrinsicWidth(Drawable of, int intrinsicWidth, int intrinsicHeight) {
+                if (debug) Log.w(TAG, "getIntrinsicWidth() .ImageViewBounds \tintrinsic: " + intrinsicWidth + "x" + intrinsicHeight + ", iv: " + imageView.getWidth() + "x" + imageView.getHeight());
+                
+                if (imageView.getScaleType() == ScaleType.CENTER_CROP) {
+                    if (imageView.getWidth() == 0) return intrinsicWidth;   // no view dimensions - no calculations
+                    int width = imageView.getWidth();
+                    if (debug) Log.w(TAG, "getIntrinsicWidth() .ImageViewBounds width: " + width + ",\tintrinsic: " + intrinsicWidth + "x" + intrinsicHeight + ", iv: " + imageView.getWidth() + "x" + imageView.getHeight());
+                    return width;
+                }
+                return intrinsicWidth;
+            }
+
+            public int getIntrinsicHeight(Drawable of, int intrinsicWidth, int intrinsicHeight) {
+                if (debug) Log.w(TAG, "getIntrinsicHeight() .ImageViewBounds \tintrinsic: " + intrinsicWidth + "x" + intrinsicHeight + ", iv: " + imageView.getWidth() + "x" + imageView.getHeight());
+                
+                if (imageView.getScaleType() == ScaleType.CENTER_CROP) {
+                    if (imageView.getHeight() == 0) return intrinsicHeight;
+                    double ratio = 1.0 * imageView.getWidth() / intrinsicWidth;
+                    int height = (int) (intrinsicHeight * ratio);
+                    if (debug) Log.w(TAG, "getIntrinsicHeight() .ImageViewBounds height: " + height + ",\tintrinsic: " + intrinsicWidth + "x" + intrinsicHeight + ", iv: " + imageView.getWidth() + "x" + imageView.getHeight());
+                    return height;
+                }
+                
+                return intrinsicHeight;
+            }
+        }
+
+        
+        public Drawable setBounds(BoundsProvider boundsProvider)  {
+            this.boundsProvider = boundsProvider;
+            return this;
+        }
+        
+        private int getInnerIntrinsicWidth() {
+            int width = 0;
+            if (spec != null) width = spec.originalWidth; 
+            if (width == 0) width = imageLoader.getOriginalImageWidth(id);
+            if (width == 0) width = defaultWidth;   // fallback to default
+            if (debug) Log.w(TAG, "getInnerIntrinsicWidth()  " + width + (spec == null ? (", id: " + id) : ", spec: " + spec) + " from: " + Dt.printStackTrace(7));
+            return width;
+        }
+        
+        private int getInnerIntrinsicHeight() {
+            int height = 0;
+            if (spec != null) height = spec.originalHeight;
+            if (height == 0) height = imageLoader.getOriginalImageHeight(id);
+            if (height == 0) height = defaultHeight;
+            if (debug) Log.w(TAG, "getInnerIntrinsicHeight() " + height + (spec == null ? (", id: " + id) : ", spec: " + spec)  + " from: " + Dt.printStackTrace(7));
+            return height;
         }
         
         /** 
@@ -346,12 +425,17 @@ public class Atlas {
          */
         @Override
         public int getIntrinsicWidth() {
-            int width = 0;
-            if (spec != null) width = spec.originalWidth; 
-            if (width == 0) width = imageLoader.getOriginalImageWidth(id);
-            if (width == 0) width = defaultWidth;   // fallback to defailt
             
-            if (debug) Log.w(TAG, "getIntrinsicWidth()  " + width + (spec == null ? (", id: " + id) : ", spec: " + spec) + " from: " + Dt.printStackTrace(7));
+            int width = getInnerIntrinsicWidth();
+            int height = getInnerIntrinsicHeight();
+            
+            if (boundsProvider != null) {
+                width = boundsProvider.getIntrinsicWidth(this, width, height);
+                if (width == 0) Log.e(TAG, "getIntrinsicWidth() provider must not return 0 width");
+                if (debug) Log.w(TAG, "getIntrinsicWidth()  provider: " + width + (spec == null ? (", id: " + id) : ", spec: " + spec) + " from: " + Dt.printStackTrace(7));
+                return width;
+            }
+
             return width;
         }
 
@@ -361,17 +445,22 @@ public class Atlas {
          */
         @Override
         public int getIntrinsicHeight() {
-            int height = 0;
-            if (spec != null) height = spec.originalHeight;
-            if (height == 0) height = imageLoader.getOriginalImageHeight(id);
-            if (height == 0) height = defaultHeight;
-            if (debug) Log.w(TAG, "getIntrinsicHeight() " + height + (spec == null ? (", id: " + id) : ", spec: " + spec)  + " from: " + Dt.printStackTrace(7));
+            int width = getInnerIntrinsicWidth();
+            int height = getInnerIntrinsicHeight();
+
+            if ( boundsProvider != null) {
+                height = boundsProvider.getIntrinsicHeight(this, width, height);
+                if (height == 0) Log.e(TAG, "getIntrinsicWidth() provider must not return 0 height");
+                if (debug) Log.w(TAG, "getIntrinsicHeight() provider: " + height + (spec == null ? (", id: " + id) : ", spec: " + spec)  + " from: " + Dt.printStackTrace(7));
+            }
+            
             return height;
         }
-        
+
         @Override
         public void draw(Canvas canvas) {
-            if (debug) Log.d(TAG, "draw() id: " + id + ", callback: " + getCallback());
+            boolean debug = true;
+            if (debug) Log.d(TAG, "draw() " + autoId +  ": id: " + id + ", callback: " + getCallback());
             Bitmap bmp = (Bitmap) imageLoader.getImageFromCache(id);
             if (bmp != null) {
                 long now = System.currentTimeMillis();
@@ -382,16 +471,22 @@ public class Atlas {
                 long age = now - inflatedAt;
                 int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
                 workPaint.setAlpha(alpha);
-                if (debug) Log.d(TAG, "draw() age: " + age + ", alpha: " + alpha);
-                if (bmp.getWidth() > 400 || bmp.getHeight() > 400) if (debug) Log.w(TAG, "draw() huge bmp: " + bmp.getWidth() + "x" + bmp.getHeight() + ", required " + getBounds().width() + "x" + getBounds().height() + ": " + id);
+                if (debug) Log.d(TAG, "draw() " + autoId +  ": age: " + age + ", alpha: " + alpha);
+                
+                if (bmp.getWidth() > 800 || bmp.getHeight() > 800) {
+                    if (debug) Log.w(TAG, "draw() " + autoId +  ": huge bmp: " + bmp.getWidth() + "x" + bmp.getHeight() + ", required " + getBounds().width() + "x" + getBounds().height() + ": " + spec);
+                }
+
                 canvas.drawBitmap(bmp, null, getBounds(), workPaint );
                 if (        (getBounds().width()  > bmp.getWidth()  && spec != null && bmp.getWidth()  < spec.originalWidth)
                         ||  (getBounds().height() > bmp.getHeight() && spec != null && bmp.getHeight() < spec.originalHeight)) {
                     requestInflate();
                 }
-                if (age < FADING_MILLIS) invalidateSelf();
+                if (age < FADING_MILLIS) {
+                    invalidateSelf();
+                }
             } else {
-                if (debug) Log.d(TAG, "draw() no bitmap, request id: " + id);
+                if (debug) Log.d(TAG, "draw() " + autoId +  ": no bitmap, request id: " + id);
                 
                 // if we draw empty bitmap, need to animate appeareance after it is inflated
                 inflatedAt = 0;
@@ -425,8 +520,8 @@ public class Atlas {
                 int requiredHeight = getBounds().height();
                 
                 if (requiredWidth == defaultWidth || requiredHeight == defaultHeight)  {
-                    if (debug) Log.w(TAG, "requestInflate() small boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id);
-                    imageLoader.requestImage(id, fileStreamProvider, this);
+                    if (debug) Log.w(TAG, "requestInflate() small boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id + ", spec: " + spec);
+                    imageLoader.requestImage(id, fileStreamProvider, this, true);
                 } else {
                     if (debug) Log.w(TAG, "requestInflate()       boundaries: " + requiredWidth + "x" + requiredHeight + ", \t id: " + id);
                     boolean decodeOnly = requiredWidth == 0 && requiredHeight == 0;
@@ -438,6 +533,13 @@ public class Atlas {
         protected void invalidate() {
             if  (Looper.getMainLooper() == Looper.myLooper()) invalidateSelf();
             else mainHandler.obtainMessage(0, this).sendToTarget();
+        }
+        
+        public void invalidateSelf() {
+            if (getCallback() == null) {
+                Log.e(TAG, "invalidateSelf() callback is null!");
+            }
+            super.invalidateSelf();
         }
 
         @Override
@@ -455,7 +557,9 @@ public class Atlas {
 
         public String toString() {
             StringBuilder builder = new StringBuilder();
-            builder.append("id: ").append(id)
+            builder
+                .append(autoId).append(": ")
+                .append("id: ").append(id)
                 .append(", from: ").append(from)
                 .append(", spec: ").append(spec)
                 .append(", inflatedAt: ").append(inflatedAt);
@@ -492,9 +596,9 @@ public class Atlas {
         // prepare preview
         BitmapFactory.Options optOriginal = new BitmapFactory.Options();
         optOriginal.inJustDecodeBounds = true;
-        //BitmapFactory.decodeFile(photoFile.getAbsolutePath(), optOriginal);
         BitmapFactory.decodeStream(new FileInputStream(imageFile), null, optOriginal);
         if (debug) Log.w(TAG, "buildPreviewAndSize() original: " + optOriginal.outWidth + "x" + optOriginal.outHeight);
+        
         int previewWidthMax = 512;
         int previewHeightMax = 512;
         int previewWidth;
@@ -750,39 +854,13 @@ public class Atlas {
         public static boolean downloadHttpToFile(String url, File file, String method, byte[] body, SSLSocketFactory sslFactory) {
             if (url == null) Log.e(TAG, "downloadHttpToFile() url is null, file: " + file);
             
-            int timeout = 8000;
+            int timeout = 3000;
             
             HttpURLConnection httpConn = null;
             try {
-                URL uRL = new URL(url);
-                
-                if (url.startsWith("https://")) {
-                    httpConn = (HttpsURLConnection) uRL.openConnection();
-                    if (sslFactory != null) {
-                        ((HttpsURLConnection) httpConn).setSSLSocketFactory(sslFactory);                    
-                    }
-                } else {
-                    httpConn = (HttpURLConnection) uRL.openConnection();
-                }
-                httpConn.setConnectTimeout(timeout);
-                httpConn.setReadTimeout(timeout);
-                httpConn.setRequestMethod(method);
-                httpConn.setDoInput(true);
-                // some servers rejects requests without user-agent with status 400 
-                httpConn.addRequestProperty("User-Agent", "Atlas-Android 1.0");    
-                
-                if (HTTP_POST.equals(method) && body != null) {
-                    httpConn.setDoOutput(true);
-                    OutputStream os = httpConn.getOutputStream();
-                    os.write(body);
-                    os.close();
-                }
+                httpConn = openHttpConnection(url, method, body, sslFactory, timeout);
 
                 int responseCode = httpConn.getResponseCode();
-                if (responseCode == 301) {
-                    String location = httpConn.getHeaderField("Location");
-                    Log.e(TAG, "Redirect [" + location + "]" + " from url: [" + url + "]");
-                }
                 if (responseCode >= 300 || responseCode < 200) {
                     Log.e(TAG, "Expected status 200, but got " + responseCode + ", message: " + httpConn.getResponseMessage() + ", url: [" + url + "]");
                     return false;
@@ -828,6 +906,51 @@ public class Atlas {
                 return false;
             }
             
+        }
+
+        private static final int MAX_REDIRECT_ATTEMPTS = 5;
+        
+        private static HttpURLConnection openHttpConnection(String url, String method, byte[] body, SSLSocketFactory sslFactory, int timeout) throws MalformedURLException, IOException, ProtocolException {
+            HttpURLConnection httpConn = null;
+            
+            for (int attempt = 0; attempt < MAX_REDIRECT_ATTEMPTS; attempt++) {
+                URL uRL = new URL(url);
+                
+                if (url.startsWith("https://")) {
+                    httpConn = (HttpsURLConnection) uRL.openConnection();
+                    if (sslFactory != null) {
+                        ((HttpsURLConnection) httpConn).setSSLSocketFactory(sslFactory);                    
+                    }
+                } else {
+                    httpConn = (HttpURLConnection) uRL.openConnection();
+                }
+                httpConn.setConnectTimeout(timeout);
+                httpConn.setReadTimeout(timeout);
+                httpConn.setRequestMethod(method);
+                httpConn.setDoInput(true);
+                // some servers rejects requests without user-agent with status 400 
+                httpConn.addRequestProperty("User-Agent", "Atlas-Android 1.0");    
+                
+                if (HTTP_POST.equals(method) && body != null) {
+                    httpConn.setDoOutput(true);
+                    OutputStream os = httpConn.getOutputStream();
+                    os.write(body);
+                    os.close();
+                }
+                
+                int responseCode = httpConn.getResponseCode();
+                if (responseCode == 301) {
+                    String location = httpConn.getHeaderField("Location");
+                    Log.e(TAG, "Redirect [" + location + "]" + " from url: [" + url + "]");
+                    Log.w(TAG, "openHttpConnection() follow redirect " + attempt + " to [" + location + "]");
+                    url = location;
+                    continue;
+                }
+                break;
+
+            }
+            return httpConn;
+
         }
 
         /** @deprecated use {@link #downloadHttpToFile(String, File, String, byte[], SSLSocketFactory)}*/
@@ -1186,7 +1309,7 @@ public class Atlas {
                         long started = System.currentTimeMillis();
                         InputStream streamForBounds = spec.inputStreamProvider.getInputStream();
                         if (streamForBounds == null) { 
-                            Log.e(TAG, "decodeImage() stream is null! Request cancelled. Spec: " + spec.id + ", provider: " + spec.inputStreamProvider.getClass().getSimpleName()); return; 
+                            Log.e(TAG, "decodeImage() stream is null! Cancelling request. Spec: " + spec.id + ", provider: " + spec.inputStreamProvider.getClass().getSimpleName()); return; 
                         }
                         BitmapFactory.Options originalOpts = new BitmapFactory.Options();
                         originalOpts.inJustDecodeBounds = true;
@@ -1196,6 +1319,12 @@ public class Atlas {
                         spec.originalWidth = originalOpts.outWidth;
                         spec.originalHeight = originalOpts.outHeight;
                         
+                        if (spec.decodeOnly) {
+                            spec.decodeOnly = false;
+                            if (spec.listener != null) spec.listener.onImageLoaded(spec);
+                            continue;
+                        }
+                        
                         // if required dimensions are not defined or bigger than original - use original dimensions
                         int requiredWidth  = spec.requiredWidth  > 0 ? Math.min(spec.requiredWidth,  originalOpts.outWidth)  : originalOpts.outWidth;
                         int requiredHeight = spec.requiredHeight > 0 ? Math.min(spec.requiredHeight, originalOpts.outHeight) : originalOpts.outHeight;
@@ -1204,6 +1333,9 @@ public class Atlas {
                         float widthSampleSize  = sampleSize(originalOpts.outWidth,  requiredWidth);
                         float heightSampleSize = sampleSize(originalOpts.outHeight, requiredHeight);
                         sampleSize = (int)Math.min(widthSampleSize, heightSampleSize);
+                        
+                        boolean debug = false; 
+                        if (spec.originalHeight > 2000 || spec.originalWidth > 2000) debug = true;
                         if (debug) Log.w(TAG, "decodeImage() sampleSize: " + sampleSize + ", original: " + spec.originalWidth + "x" + spec.originalHeight
                                 + " required: " + spec.requiredWidth + "x" + spec.requiredHeight);
                         
@@ -1352,6 +1484,13 @@ public class Atlas {
         /**
          * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener, boolean) 
          */
+        public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, ImageLoader.ImageLoadListener loadListener, boolean decodeOnly) {
+            return requestImage(id, streamProvider, 0, 0, false, loadListener, decodeOnly);
+        }
+        
+        /**
+         * @see #requestImage(Object, InputStreamProvider, int, int, boolean, ImageLoadListener, boolean) 
+         */
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, boolean gif, ImageLoader.ImageLoadListener loadListener) {
             return requestImage(id, streamProvider, 0, 0, gif, loadListener, false);
         }
@@ -1370,6 +1509,10 @@ public class Atlas {
          * @param decodeOnly        - will perform decode only and update {@link ImageSpec#originalWidth} and {@link ImageSpec#originalHeight}
          */
         public ImageSpec requestImage(Object id, InputStreamProvider streamProvider, int requiredWidth, int requiredHeight, boolean gif, ImageLoader.ImageLoadListener loadListener, boolean decodeOnly) {
+            if (!decodeOnly && (requiredWidth == 0 || requiredHeight == 0)) {
+                Log.e(TAG, "requestImage() wtf decode with 0x0 required? " + id + " from: " + Dt.printStackTrace());
+            }
+            
             ImageSpec spec = null;
             synchronized (loaderMonitor) {
                 for (int i = 0; i < queue.size(); i++) {        // remove from deep deep blue 
@@ -1395,6 +1538,7 @@ public class Atlas {
                     spec.originalWidth = imageEntry.originalWidth;
                     spec.originalHeight = imageEntry.originalHeight;
                 }
+                spec.decodeOnly = decodeOnly;
                 queue.add(0, spec);                             // and put it to the surface in front of all 
                 loaderMonitor.notifyAll();
             }
@@ -1460,8 +1604,8 @@ public class Atlas {
             public int originalWidth;
             public int originalHeight;
             public boolean gif;
-            public int downloadProgress;
             public int retries = 0;
+            public boolean decodeOnly;
             public ImageLoader.ImageLoadListener listener;
             
             public String toString() {
@@ -1470,7 +1614,6 @@ public class Atlas {
                 if (requiredWidth != 0 || requiredHeight != 0) sb.append(", .r[").append(requiredWidth).append("x").append(requiredHeight).append("]");
                 sb.append(" .id: ").append(id);
                 sb.append(gif ? ", gif" : "");
-                sb.append(", progress: ").append(downloadProgress);
                 return sb.toString();
             }
             

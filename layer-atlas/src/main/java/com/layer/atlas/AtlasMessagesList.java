@@ -672,10 +672,19 @@ public class AtlasMessagesList extends FrameLayout implements LayerChangeEventLi
     }; 
     
     @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (debug) Log.w(TAG, "onAttachedToWindow() attaching to window. Ready to register itself. called from: " + Dt.printStackTrace());
+        
+        client.registerEventListener(this);
+    }
+
+    @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        if (debug) Log.w(TAG, "onDetachedFromWindow() clean cells and views... called from: " + Dt.printStackTrace());
         
-        if (debug) Log.d(TAG, "onDetachedFromWindow() clean cells and views... ");
+        client.unregisterEventListener(this);
         cells.clear();
         messagesAdapter.notifyDataSetChanged();
         messagesList.removeAllViewsInLayout();
