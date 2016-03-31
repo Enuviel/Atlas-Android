@@ -51,19 +51,24 @@ public class AtlasFrameLayout extends FrameLayout {
     private static final String TAG = AtlasFrameLayout.class.getSimpleName();
     private static final boolean debug = false;
     
+    // xml attributes
+    private float widthToHeightRatio = 0.0f;
+    private Drawable maskDrawable;
+    
+    // round-rect based shaping
     private float[] corners = new float[] { 0, 0, 0, 0 };
     private boolean refreshShape = true;
-    
     private RectF pathRect = new RectF();
     private Path shaper = new Path();
     
-    private Drawable maskDrawable;
+    // drawable based shaping
     private Bitmap  maskBitmap;
     private Canvas  maskCanvas;
     private Paint   maskPaint;
     private Bitmap  surfaceBitmap;
     private Canvas  surfaceCanvas;
     private Paint   plainPaint;
+    private int     defaultLayerType;
     {
         plainPaint = new Paint();
         
@@ -71,6 +76,7 @@ public class AtlasFrameLayout extends FrameLayout {
         maskPaint.setAntiAlias(true);
         maskPaint.setDither(true);
         maskPaint.setXfermode(new PorterDuffXfermode(Mode.DST_IN));
+        defaultLayerType = getLayerType();
     }
     
     public AtlasFrameLayout(Context context, AttributeSet attrs) {
@@ -88,9 +94,16 @@ public class AtlasFrameLayout extends FrameLayout {
         if (debug) Log.w(TAG, "AtlasFrameLayout() attrs: " + attrs + ", defStyle: " + defStyle);
         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.AtlasFrameLayout, defStyle, 0);
         try {
-            int resourceId = a.getResourceId(R.styleable.AtlasFrameLayout_maskDrawable, 0);
-            if (debug) Log.w(TAG, "AtlasFrameLayout() resourceId: " + resourceId);
-            if (resourceId > 0) maskDrawable = getResources().getDrawable(resourceId);
+            int maskAttr = a.getResourceId(R.styleable.AtlasFrameLayout_maskDrawable, 0);
+            if (debug) Log.w(TAG, "AtlasFrameLayout() mask resourceId: " + maskAttr);
+            if (maskAttr > 0) {
+                this.maskDrawable = getResources().getDrawable(maskAttr);
+            }
+            float widthToHeightAttr = a.getFloat(R.styleable.AtlasFrameLayout_widthToHeightRatio, 0.0f);
+            if (debug) Log.w(TAG, "AtlasFrameLayout() widthToheight ratio: " + widthToHeightAttr);
+            if (widthToHeightAttr > 0.0f) {
+                this.widthToHeightRatio = widthToHeightAttr;
+            }
         } finally {
             a.recycle();
         }
@@ -107,18 +120,32 @@ public class AtlasFrameLayout extends FrameLayout {
     public void setMask(Drawable maskDrawable) {
         this.maskDrawable = maskDrawable;
         refreshShape = true;
+        prepareRendering();
         invalidate();
     }
     
+    public float getWidthToHeightRatio() {
+        return widthToHeightRatio;
+    }
+
+    public void setWidthToHeightRatio(float widthToHeightRatio) {
+        this.widthToHeightRatio = widthToHeightRatio;
+        requestLayout();
+        invalidate();
+    }
+
     /** SOFTWARE rendering is required for canvas.clipPath on Android API version lower 18 */
     private void prepareRendering() {
-        // dispatchDraw() is not called with hardware layer when underlying view invalidates so it doesn't work with Atlas.Drawable
-        if (true|| android.os.Build.VERSION.SDK_INT < 18) {
+        // dispatchDraw() is not called with hardware layer when underlying view invalidates 
+        // so it doesn't work with animated content like Atlas.Drawable
+        if (maskDrawable != null) {
             setLayerType(LAYER_TYPE_SOFTWARE, null);
-            if (debug)  Log.d(TAG, "setSoftwareRendering() software rendering...");
+            setDrawingCacheEnabled(false);
+            if (debug)  Log.d(TAG, "prepareRendering() set software rendering...");
+        } else {
+            setLayerType(LAYER_TYPE_SOFTWARE, null);
+            if (debug)  Log.d(TAG, "prepareRendering() set  default rendering...");
         }
-        // not sure if it has an effect, bitmap is created even if flag is off
-        setDrawingCacheEnabled(false);
     }
     
     /** 
@@ -245,7 +272,7 @@ public class AtlasFrameLayout extends FrameLayout {
         //super.onMeasure(widthMeasureSpec, heightMeasureSpec);
         superMeasure(widthMeasureSpec, heightMeasureSpec);
         
-        int mWidthAfter = getMeasuredWidth();
+        int mWidthAfter  = getMeasuredWidth();
         int mHeightAfter = getMeasuredHeight();
         int maxChildWidth = 0;
         for (int i = 0; i < getChildCount(); i++) {
@@ -254,6 +281,12 @@ public class AtlasFrameLayout extends FrameLayout {
                 if (debug) Log.w(TAG, "onMeasure() child: " + i + ", width: " + child.getMeasuredWidth() + " > maxWidth: " + maxChildWidth + ", visibility: " + child.getVisibility() + ", " + child);
                 maxChildWidth = child.getMeasuredWidth();
             }
+        }
+        
+        if (widthToHeightRatio != 0.0f) {
+            int newHeight = (int) (mWidthAfter * widthToHeightRatio);
+            if (debug) Log.w(TAG, "onMeasure() ratio: " + widthToHeightRatio + ", width: " + mWidthAfter + ", height: " + mHeightAfter + " -> " + newHeight);
+            setMeasuredDimension(mWidthAfter, newHeight);
         }
         
         if (debug) Log.w(TAG, "onMeasure() after: " + mWidthAfter + "x" + mHeightAfter);
@@ -310,6 +343,7 @@ public class AtlasFrameLayout extends FrameLayout {
                 resolveSizeAndState(maxWidth, widthMeasureSpec, childState),
                 resolveSizeAndState(maxHeight, heightMeasureSpec, childState << MEASURED_HEIGHT_STATE_SHIFT));
 
+        // always work with all matchParentChildren, not just when there are two or more as FrameLayout does
         count = mMatchParentChildren.size();
         for (int i = 0; i < count; i++) {
             final View child = mMatchParentChildren.get(i);

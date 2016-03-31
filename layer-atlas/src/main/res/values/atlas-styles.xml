@@ -108,6 +108,7 @@
     
     <declare-styleable name="AtlasFrameLayout">
         <attr name="maskDrawable" format="reference" />
+        <attr name="widthToHeightRatio" format="float" />
     </declare-styleable>
 
     <!-- ############################## -->

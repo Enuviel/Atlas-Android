@@ -76,7 +76,6 @@ import android.view.Window;
 import android.widget.ImageView;
 import android.widget.ImageView.ScaleType;
 
-import com.layer.atlas.Atlas.DownloadQueue.CompleteListener;
 import com.layer.atlas.Dt.Log;
 import com.layer.atlas.cells.GIFCell;
 import com.layer.atlas.cells.GeoCell;
@@ -190,7 +189,7 @@ public class Atlas {
      */
     public static class Drawable extends android.graphics.drawable.Drawable implements DownloadQueue.CompleteListener, ImageLoader.ImageLoadListener {
         private static final String TAG = Drawable.class.getSimpleName();
-        private static final boolean debug = true;
+        private static final boolean debug = false;
         private static final boolean debugDraw = false;
         private static final Paint debugPaintDwnld = new Paint();
         private static final Paint debugPaintInflt = new Paint();
@@ -277,7 +276,6 @@ public class Atlas {
         public Drawable(String imageId){
             if (imageId == null) throw new IllegalArgumentException("Drawable .id cannot be null");
             this.id = imageId;
-            boolean debug = true;
             if (debug) Log.w(TAG, "Drawable() " + autoId + ": " + imageId);
         }
         
@@ -341,9 +339,7 @@ public class Atlas {
         public void setBounds(int left, int top, int right, int bottom) {
             int width = right - left;
             int height = bottom - top;
-            boolean debug = false;
-            if (width > 1600 || height > 1600) debug = true;
-            if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
+             if (debug) Log.w(TAG, "setBounds()          " + left+ "," + top + " -> " + right+ "," + bottom + (spec == null ? (", id: " + id) : ", spec: " + spec) + ", from: " + Dt.printStackTrace(7));
             super.setBounds(left, top, right, bottom);
         }
         
@@ -459,7 +455,6 @@ public class Atlas {
 
         @Override
         public void draw(Canvas canvas) {
-            boolean debug = true;
             if (debug) Log.d(TAG, "draw() " + autoId +  ": id: " + id + ", callback: " + getCallback());
             Bitmap bmp = (Bitmap) imageLoader.getImageFromCache(id);
             if (bmp != null) {
@@ -473,7 +468,8 @@ public class Atlas {
                 workPaint.setAlpha(alpha);
                 if (debug) Log.d(TAG, "draw() " + autoId +  ": age: " + age + ", alpha: " + alpha);
                 
-                if (bmp.getWidth() > 800 || bmp.getHeight() > 800) {
+                if (bmp.getWidth() > 1400 || bmp.getHeight() > 1400) {
+                    //boolean debug = true;
                     if (debug) Log.w(TAG, "draw() " + autoId +  ": huge bmp: " + bmp.getWidth() + "x" + bmp.getHeight() + ", required " + getBounds().width() + "x" + getBounds().height() + ": " + spec);
                 }
 
@@ -537,7 +533,7 @@ public class Atlas {
         
         public void invalidateSelf() {
             if (getCallback() == null) {
-                Log.e(TAG, "invalidateSelf() callback is null!");
+                if (debug) Log.w(TAG, "invalidateSelf() callback is null!");
             }
             super.invalidateSelf();
         }
@@ -1230,11 +1226,11 @@ public class Atlas {
 
     /**
      * TODO: 
-     * 
-     * - imageCache should accept any "Downloader" that download something with progress 
-     * - imageCache should reschedule image if decoding failed
-     * - imageCache should reschedule image if decoded width was cut due to OOM (-> sampleSize > 1) 
+     *
+     * - track UI frames to execute inflating only at idle times and avoid carousel of images 
+     *      requested from the same UI frame
      * - maximum retries should be configurable
+     * - imageCache should accept any "Downloader" that download something with progress 
      * 
      */
     public static class ImageLoader {
@@ -1255,14 +1251,22 @@ public class Atlas {
             private static final long serialVersionUID = 1L;
             protected boolean removeEldestEntry(Entry<Object, ImageCacheEntry> eldest) {
                 // calculate available memory
-                long maxMemory = Runtime.getRuntime().maxMemory();
+                long maxMemory  = Runtime.getRuntime().maxMemory();
                 long usedMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
                 boolean cleaningRequired = 1.0 * usedMemory / maxMemory > MEMORY_THRESHOLD; 
                 
                 final Object id = eldest.getKey();
-                if (cleaningRequired) if (debug) Log.w(TAG, "removeEldestEntry() cleaning bitmap for: " + id + ", size: " + cache.size() + ", queue: " + queue.size());
-                else                  if (debug) Log.w(TAG, "removeEldestEntry() " + " nothing, size: " + cache.size() + ", queue: " + queue.size());                    
-    
+                int bytes = 0; 
+                if (eldest.getValue().bitmapOrMovie instanceof Bitmap) {
+                    bytes = ((Bitmap)eldest.getValue().bitmapOrMovie).getByteCount(); 
+                }
+                //boolean debug = true;
+                if (cleaningRequired) if (debug) Log.w(TAG, "removeEldestEntry()    cleaning, cache: " + cache.size() + ", queue: " + queue.size() + ", " +  bytes + " bytes for: " + id);
+                else                  if (debug) Log.w(TAG, "removeEldestEntry() no cleaning, cache: " + cache.size() + ", queue: " + queue.size());                    
+                
+                if (cleaningRequired) {
+                    System.gc();
+                }
                 return cleaningRequired;
             }
         };
@@ -1321,7 +1325,7 @@ public class Atlas {
                         
                         if (spec.decodeOnly) {
                             spec.decodeOnly = false;
-                            if (spec.listener != null) spec.listener.onImageLoaded(spec);
+                            fireOnImageLoaded(spec);
                             continue;
                         }
                         
@@ -1334,8 +1338,8 @@ public class Atlas {
                         float heightSampleSize = sampleSize(originalOpts.outHeight, requiredHeight);
                         sampleSize = (int)Math.min(widthSampleSize, heightSampleSize);
                         
-                        boolean debug = false; 
-                        if (spec.originalHeight > 2000 || spec.originalWidth > 2000) debug = true;
+                        if (spec.originalHeight > 2000 || spec.originalWidth > 2000) {} // print warning for debug purposes
+                        
                         if (debug) Log.w(TAG, "decodeImage() sampleSize: " + sampleSize + ", original: " + spec.originalWidth + "x" + spec.originalHeight
                                 + " required: " + spec.requiredWidth + "x" + spec.requiredHeight);
                         
@@ -1347,12 +1351,14 @@ public class Atlas {
                             bmp = BitmapFactory.decodeStream(streamForBitmap, null, decodeOpts);
                         } catch (OutOfMemoryError e) {
                             long requiredBytes = 4 * originalOpts.outWidth * originalOpts.outHeight / sampleSize;
+                            //boolean debug = true;
                             if (debug) Log.w(TAG, "decodeImage() out of memory, need " + requiredBytes 
                                     + " bytes for " + requiredWidth + "x" + requiredHeight
                                     + " orig " + originalOpts.outWidth + "x" + originalOpts.outHeight + " ss: " + sampleSize
-                                    + " images: " + cache.size() + ", remove eldest. id: " + spec.id);
+                                    + " cache: " + cache.size() + ", queue: " + queue.size() + ", removing eldest." 
+                                    + " id: " + spec);
                             int bytesClean = removeEldest(requiredBytes);
-                            if (true) Log.w(TAG, "decodeImage()         bytes clean " + bytesClean);
+                            if (debug) Log.w(TAG, "decodeImage()         bytes clean " + bytesClean);
                             System.gc();
                         }
                         Tools.closeQuietly(streamForBitmap);
@@ -1375,7 +1381,7 @@ public class Atlas {
                         if (bitmapOrMovie != null) {
                             ImageCacheEntry imageCore = new ImageCacheEntry(bitmapOrMovie, spec.originalWidth, spec.originalHeight, spec.inputStreamProvider);
                             cache.put(spec.id, imageCore);
-                            if (spec.listener != null) spec.listener.onImageLoaded(spec);
+                            fireOnImageLoaded(spec);
                         } else if (spec.retries < BITMAP_DECODE_RETRIES) {
                             spec.retries++;
                             queue.add(0, spec);         // schedule retry
@@ -1388,6 +1394,13 @@ public class Atlas {
    
                     if (debug) Log.w(TAG, "decodeImage()   cache: " + cache.size() + ", queue: " + queue.size() + ", id: " + spec.id);
                 }
+            }
+        }
+        
+        private void fireOnImageLoaded(ImageSpec spec) {
+            for (int i = spec.listeners.size() - 1; i >= 0 ; i--) {
+                ImageLoadListener listener = spec.listeners.remove(i);
+                listener.onImageLoaded(spec);
             }
         }
         
@@ -1445,6 +1458,7 @@ public class Atlas {
          * @return - byteCount of removed bitmap if bitmap found. <bold>-1</bold> otherwise
          */
         private int removeEldest() {
+            //boolean debug = true;
             synchronized (loaderMonitor) {
                 if (cache.size() > 0) {
                     Map.Entry<Object, ImageCacheEntry> entry = cache.entrySet().iterator().next();
@@ -1528,8 +1542,12 @@ public class Atlas {
                     spec.inputStreamProvider = streamProvider;
                     spec.requiredHeight = requiredHeight;
                     spec.requiredWidth = requiredWidth;
-                    spec.listener = loadListener;
+                    spec.listeners.add(loadListener);
                     spec.gif = gif;
+                    spec.decodeOnly = decodeOnly;
+                } else {
+                    spec.listeners.add(loadListener);
+                    if (decodeOnly == false) spec.decodeOnly = false;  // now decode is not enough 
                 }
                 // check something we have in memory for such id
                 ImageCacheEntry imageEntry = cache.get(id);
@@ -1538,7 +1556,7 @@ public class Atlas {
                     spec.originalWidth = imageEntry.originalWidth;
                     spec.originalHeight = imageEntry.originalHeight;
                 }
-                spec.decodeOnly = decodeOnly;
+                
                 queue.add(0, spec);                             // and put it to the surface in front of all 
                 loaderMonitor.notifyAll();
             }
@@ -1606,7 +1624,7 @@ public class Atlas {
             public boolean gif;
             public int retries = 0;
             public boolean decodeOnly;
-            public ImageLoader.ImageLoadListener listener;
+            public final ArrayList<ImageLoader.ImageLoadListener> listeners = new ArrayList<Atlas.ImageLoader.ImageLoadListener>();
             
             public String toString() {
                 StringBuilder sb = new StringBuilder();
