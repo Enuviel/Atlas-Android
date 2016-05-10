@@ -76,6 +76,7 @@ import android.view.Window;
 import android.widget.ImageView;
 import android.widget.ImageView.ScaleType;
 
+import com.layer.atlas.Atlas.DownloadQueue.CompleteListener;
 import com.layer.atlas.Dt.Log;
 import com.layer.atlas.cells.GIFCell;
 import com.layer.atlas.cells.GeoCell;
@@ -264,7 +265,9 @@ public class Atlas {
         /** provides boundaries */
         private BoundsProvider boundsProvider;
 
-        private static final int FADING_MILLIS = 333;
+        private static final int FADING_MILLIS = 120;
+        
+        private int fadeInDuration = FADING_MILLIS;
 
         /** 
          * Creates {@link Drawable} ready to download and display.
@@ -461,10 +464,10 @@ public class Atlas {
                 long now = System.currentTimeMillis();
                 
                 // bmp may be available when drawable is new (inflatedAt = 0), so set "inflated" somewhen in the past
-                if (inflatedAt == 0) inflatedAt = now - (FADING_MILLIS * 2);   
+                if (inflatedAt == 0) inflatedAt = now - (fadeInDuration * 2);   
                 
                 long age = now - inflatedAt;
-                int alpha = (int) (255 * 1.0f * Math.min(age, FADING_MILLIS) / FADING_MILLIS);
+                int alpha = (int) (255 * 1.0f * Math.min(age, fadeInDuration) / fadeInDuration);
                 workPaint.setAlpha(alpha);
                 if (debug) Log.d(TAG, "draw() " + autoId +  ": age: " + age + ", alpha: " + alpha);
                 
@@ -478,7 +481,7 @@ public class Atlas {
                         ||  (getBounds().height() > bmp.getHeight() && spec != null && bmp.getHeight() < spec.originalHeight)) {
                     requestInflate();
                 }
-                if (age < FADING_MILLIS) {
+                if (age < fadeInDuration) {
                     invalidateSelf();
                 }
             } else {
